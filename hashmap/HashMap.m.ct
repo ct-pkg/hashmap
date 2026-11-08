@@ -1,0 +1,89 @@
+/*
+ * HashMap - the dynamic hash map contract (S0 skeleton).
+ *
+ * This unit is the public contract only: handle aliases and trait signatures.
+ * The `map trait ... for type ...` blocks and the shim land at S1, so this file
+ * is intentionally not compilable yet -- importing it gets the reader the exact
+ * method list in docs/design.md, nothing more.
+ *
+ * Two monomorphic shapes, mirroring std::map's pair:
+ *
+ *   HashStrInt *  char * key -> int value
+ *   HashIntPtr *  int key    -> borrowed void * value
+ *
+ * Each shape has its own wrapper struct so the two CT hosts stay distinct; a
+ * single host cannot carry two `put` signatures (methods are keyed by
+ * (host, name), and the signature does not disambiguate).
+ *
+ * Ownership, invariant for the whole package:
+ *   - an item is copied into the table;
+ *   - a `char *` key is deep-copied by the shim (strdup + elfree), so the
+ *     caller may free its buffer right after put();
+ *   - a `void *` value is copied as a pointer only; the pointee stays with the
+ *     caller and is never released by this package;
+ *   - every handle is released explicitly. There is no `Drop`: a built-in Drop
+ *     is emitted `static`, so a package unit cannot destroy a caller's value.
+ */
+namespace hashmap;
+
+pub type HashStrInt = struct ct_hashmap_strint;
+pub type HashIntPtr = struct ct_hashmap_intptr;
+pub type HashStrIntIter = struct ct_hashmap_strint_iter;
+pub type HashIntPtrIter = struct ct_hashmap_intptr_iter;
+
+/* Receiveless constructors. Fixed seeds 0/0 are deterministic; use the Seeded
+ * variants for keys an attacker can choose (hash flooding). */
+pub trait Lib {
+    HashStrInt *newStrInt(int initialCapacity);
+    HashStrInt *newStrIntSeeded(int initialCapacity, long long seed0, long long seed1);
+    HashIntPtr *newIntPtr(int initialCapacity);
+    HashIntPtr *newIntPtrSeeded(int initialCapacity, long long seed0, long long seed1);
+}
+
+pub trait StrIntMap {
+    HashStrInt *setLoadFactor(double factor);
+
+    HashStrInt *put(const char *key, int value);
+    int get(const char *key, int *out);
+    int del(const char *key);
+
+    int len();
+    HashStrInt *clear();
+
+    int status();
+    HashStrInt *clearStatus();
+
+    HashStrIntIter *iter();
+    void release();
+}
+
+pub trait StrIntIter {
+    int next();
+    char *key();
+    int value();
+    void release();
+}
+
+pub trait IntPtrMap {
+    HashIntPtr *setLoadFactor(double factor);
+
+    HashIntPtr *put(int key, void *value);
+    int get(int key, void **out);
+    int del(int key);
+
+    int len();
+    HashIntPtr *clear();
+
+    int status();
+    HashIntPtr *clearStatus();
+
+    HashIntPtrIter *iter();
+    void release();
+}
+
+pub trait IntPtrIter {
+    int next();
+    int key();
+    void *value();
+    void release();
+}

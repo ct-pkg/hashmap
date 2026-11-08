@@ -1,0 +1,15 @@
+/*
+ * HashMapTypes - the status codes the CT side compares against.
+ *
+ * Only enums live here: a `.m.ct` cannot declare an enum, and a consumer that
+ * imports only `hashmap::HashMap` does not see these constants. Import both
+ * units.
+ */
+namespace hashmap;
+
+pub enum HashMapStatus {
+    HMAP_OK        = 0,
+    HMAP_NOT_FOUND = 1,
+    HMAP_OOM       = 2,
+    HMAP_INVALID   = 3
+}
