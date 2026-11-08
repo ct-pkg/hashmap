@@ -10,6 +10,5 @@ namespace hashmap;
 pub enum HashMapStatus {
     HMAP_OK        = 0,
     HMAP_NOT_FOUND = 1,
-    HMAP_OOM       = 2,
-    HMAP_INVALID   = 3
+    HMAP_INVALID   = 2
 }

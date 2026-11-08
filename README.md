@@ -116,9 +116,10 @@ ct install
 | --- | ---: | --- |
 | `HMAP_OK` | 0 | 成功 |
 | `HMAP_NOT_FOUND` | 1 | 键不存在 |
-| `HMAP_INVALID` | 3 | 空键 / 空句柄 |
+| `HMAP_INVALID` | 2 | 空键 / 空句柄 |
 
-`HMAP_OOM`（2）已撤销，编号不复用：OOM 直接终止进程，见 §5.5。
+枚举值紧凑为 0 / 1 / 2，与 `dict` 的 `DICT_OK` / `DICT_NOT_FOUND` / `DICT_INVALID`
+一一对应；没有 OOM 项——内存不足直接终止进程，见 §5.5。
 
 ## 5. 教程正文
 
@@ -197,7 +198,7 @@ ct install
 ### 0.1.0（2026-11-08，未发布）
 
 - S0：需求与骨架。`ct.pkg`、9 节 README、契约 `.m.ct` / `.h.ct`、`tests/` 占位。
-- OOM 语义统一为进程终止（与 `dict` 一致）：公开面不提供 `status()` / `clearStatus()`，
-  `HMAP_OOM` 撤销。
+- OOM 语义统一为进程终止（与 `dict` 一致）：状态码为 `HMAP_OK` / `HMAP_NOT_FOUND` /
+  `HMAP_INVALID`（0 / 1 / 2），没有 OOM 项。
 - 未写实现、未拷第三方源码、未打 tag、未 push。
 - 首个 tag 为 `v0.1.0`，在此之前完成设计文档 §10 的 S1.0–S1.5。

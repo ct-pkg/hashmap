@@ -129,10 +129,10 @@
 | --- | ---: | --- |
 | `HMAP_OK` | 0 | 成功 |
 | `HMAP_NOT_FOUND` | 1 | 键不存在 |
-| `HMAP_INVALID` | 3 | 参数非法（空键、空句柄） |
+| `HMAP_INVALID` | 2 | 参数非法（空键、空句柄） |
 
-`HMAP_OOM`（值 2）随 §6 的裁决**撤销，编号不复用**；它不再出现在任何返回值里。
-S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删除（本轮只改文档）。
+枚举值紧凑为 0 / 1 / 2，与 `dict` 的 `DICT_OK` / `DICT_NOT_FOUND` / `DICT_INVALID`
+一一对应；没有 OOM 项——内存不足直接终止进程（§6）。包未发布，编号前移没有兼容负担。
 
 ### 4.1 `namespace hashmap`（`Lib`）
 
@@ -213,7 +213,7 @@ S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删�
    `set` 结果为 `NULL` 且 `hashmap_oom()` 为真时，向 stderr 打印
    `hashmap: out of memory: put` 并 `abort()`。公开面不提供错误码，也不提供状态查询。
 2. 构造器同理：`new*` 的表分配失败直接终止（打印 `hashmap: out of memory: new`），
-   不返回 0；因此 `HMAP_OOM` 从状态码中撤销（§4）。
+   不返回 0；因此状态码里没有 OOM 项（§4）。
 3. 返回值只表达逻辑失败：`HMAP_NOT_FOUND`（键不存在）、`HMAP_INVALID`（空键 / 空句柄）。
 4. `get` / `del` / `len` / 迭代不分配，不会触发终止；`del` 的缩容失败由上游吞掉，不影响
    数据完整性。
@@ -230,15 +230,14 @@ S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删�
 > **裁决 D-1（2026-11-08，已定）**：按 ct-pkg 默认的 OO / 链式准则执行——`put` / `clear` /
 > `setLoadFactor` 返回接收者。`map-options.md` §4.3 / §7 的"不做链式"是 ct 仓写的规划文字，
 > 与 ct-pkg 的 OO 默认准则冲突时以 ct-pkg 为准；这不是笔误。链式本身不附带错误通道，
-> OOM 因此按本节终止处理（原 D-1 附带的"粘性状态 + `clearStatus()`"已被本节取代）。
-> 若将来要改回逐次可见的 `int` 返回值，方法表不变，只改返回类型与 mapping。
+> OOM 因此按本节终止处理。若将来要改回逐次可见的 `int` 返回值，方法表不变，只改返回类型
+> 与 mapping。
 
 ---
 
 ## 7. shim 数量估算
 
 设每种形状的公开方法数为 12（句柄 8 + 迭代器 4），`namespace` 构造器 4 个。
-（无 `status` / `clearStatus`，见 §6。）
 
 | 项 | `HashStrInt` | `HashIntPtr` | 新增一种形状 |
 | --- | ---: | ---: | ---: |
@@ -277,7 +276,7 @@ S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删�
 - 不做统一 `Map` trait / 抽象层（所有权语义与 `dict` 不同，且无泛型）。
 - 不做自动析构 / `Drop`。
 - 不做线程安全与内置锁；`hashmap.c` 本身明确 NOT THREAD SAFE。
-- 不做 OOM 软失败、粘性状态、`clearStatus()`：OOM 直接终止（§6，与 `dict` 同一契约）。
+- 不做 OOM 软失败或粘性状态：OOM 直接终止（§6，与 `dict` 同一契约）。
 - 不做迭代中删除、不做 `hashmap_scan` 回调（CT 无闭包）。
 - 不做自定义 allocator 的公开入口（上游 `hashmap_set_allocator` 是进程级全局，公开会污染
   整个进程；只在测试夹具里用）。
@@ -301,9 +300,7 @@ S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删�
 
 ### S1.1 · `HashStrInt` 核心
 
-- 落地 `newStrInt*` / `put` / `get` / `del` / `len` / `clear` / `release`；
-  同时删掉 S0 骨架 [_HashMap.m.ct_](../hashmap/HashMap.m.ct) 里的 `status` / `clearStatus`
-  与 [_HashMapTypes.h.ct_](../hashmap/HashMapTypes.h.ct) 里的 `HMAP_OOM`（§6 的裁决）。
+- 落地 `newStrInt*` / `put` / `get` / `del` / `len` / `clear` / `release`。
 - 测试：插入、覆盖、删除、清空、重复 `release(0)`；`put` 后立刻 `free` 调用方键缓冲，
   再 `get` 仍命中（证明 strdup）；`clear` 后 `len == 0` 且旧键不可查。
 - **同一个键覆盖 10 万次、删除 10 万次**，泄漏门禁必须为 0 增长：上游不会为覆盖/删除调用

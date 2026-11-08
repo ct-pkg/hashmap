@@ -50,9 +50,6 @@ pub trait StrIntMap {
     int len();
     HashStrInt *clear();
 
-    int status();
-    HashStrInt *clearStatus();
-
     HashStrIntIter *iter();
     void release();
 }
@@ -73,9 +70,6 @@ pub trait IntPtrMap {
 
     int len();
     HashIntPtr *clear();
-
-    int status();
-    HashIntPtr *clearStatus();
 
     HashIntPtrIter *iter();
     void release();
