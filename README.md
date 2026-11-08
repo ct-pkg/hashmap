@@ -14,7 +14,7 @@
 
 - 动态增长的通用哈希表，容量不需要在创建时定死；
 - 条目按形状拷贝：`char *` 键由包 `strdup` 深拷贝，`int` / `void *` 值按值拷贝；
-- 提供显式删除、清空、只读遍历与 OOM 状态。
+- 提供显式删除、清空与只读遍历；写入路径的 OOM 直接终止（§5.5）。
 
 不做的事：
 
@@ -22,6 +22,7 @@
 - **不是 `dict` 的替代**：本包扩容一次性搬全表，超大表会有停顿；`dict` 是增量 rehash；
 - 不统一三者的接口（所有权语义不同，且语言没有泛型）；
 - 不提供自动析构；只给显式 `release()`；
+- **OOM 不做软失败**：内存不足时直接终止进程，没有错误码或状态查询，与 `dict` 同一契约（§5.5）；
 - 不是线程安全的，也不内置锁；
 - 不支持遍历中删除。
 
@@ -73,7 +74,7 @@ ct install
 
 | 方法 | 签名 | 语义 |
 | --- | --- | --- |
-| `newStrInt` | `HashStrInt *newStrInt(int initialCapacity)` | 建 `char *` → `int` 表；容量 0 用上游默认；失败返回 0 |
+| `newStrInt` | `HashStrInt *newStrInt(int initialCapacity)` | 建 `char *` → `int` 表；容量 0 用上游默认；分配失败即终止（§5.5） |
 | `newStrIntSeeded` | `HashStrInt *newStrIntSeeded(int initialCapacity, long long seed0, long long seed1)` | 同上，显式给哈希种子 |
 | `newIntPtr` | `HashIntPtr *newIntPtr(int initialCapacity)` | 建 `int` → `void *` 表 |
 | `newIntPtrSeeded` | `HashIntPtr *newIntPtrSeeded(int initialCapacity, long long seed0, long long seed1)` | 同上，显式给种子 |
@@ -88,8 +89,6 @@ ct install
 | `del` | `int del(const char *key)` | 删除并返回状态 |
 | `len` | `int len()` | 条目数，上限 2^31-1 |
 | `clear` | `HashStrInt *clear()` | 清空条目，保留桶数组；返回接收者 |
-| `status` | `int status()` | 最近一次数据操作的状态 |
-| `clearStatus` | `HashStrInt *clearStatus()` | 清除粘性 OOM；返回接收者 |
 | `iter` | `HashStrIntIter *iter()` | 新建只读迭代器 |
 | `release` | `void release()` | 释放表与全部键副本；`release(0)` 空操作 |
 
@@ -117,8 +116,9 @@ ct install
 | --- | ---: | --- |
 | `HMAP_OK` | 0 | 成功 |
 | `HMAP_NOT_FOUND` | 1 | 键不存在 |
-| `HMAP_OOM` | 2 | 分配失败（粘性） |
 | `HMAP_INVALID` | 3 | 空键 / 空句柄 |
+
+`HMAP_OOM`（2）已撤销，编号不复用：OOM 直接终止进程，见 §5.5。
 
 ## 5. 教程正文
 
@@ -135,18 +135,31 @@ ct install
 
 这是本包最容易出错的地方，也是与 `dict` 最本质的差异：`dict` 只存指针，键必须一直活着。
 
-### 5.3 链式与状态
+### 5.3 链式与返回值
 
 配置与写入都返回接收者：`h.setLoadFactor(0.75).put(...).put(...)`。
-`put` 失败不在返回值上体现，OOM 是粘性的；批量写完后用 `h.status()` 检查，
-再决定是否 `h.clearStatus()` 重试。
-链式是 ct-pkg 的默认 OO 准则（`map-options.md` 里"不做链式"是 ct 仓的规划文字，
-两者冲突时以 ct-pkg 为准，见设计文档 D-1）。
+返回值只表达"接收者本身"，不携带成功/失败信息；链式是 ct-pkg 的默认 OO 准则
+（`map-options.md` 里"不做链式"是 ct 仓的规划文字，两者冲突时以 ct-pkg 为准，
+见设计文档 D-1）。写入路径的失败语义只有一种：内存不足即终止，见 §5.5。
 
 ### 5.4 遍历
 
 迭代器只读，顺序不承诺。`key()` / `value()` 指向表内部，任何 `put` / `del` / `clear` 之后
 都不能再使用；迭代器本身要 `release()`。遍历中要删除，先把键拷出来，结束后再删。
+
+### 5.5 失败语义（对外契约）
+
+**内存不足 = 进程终止，不返回错误码。** 这是本包与 `dict` 共同的契约。
+
+链式 `put` 返回接收者本身，没有错误码通道，软失败只能表现为"后续写入静默丢失 + 事后查
+状态"，调用方写 `t.put(a).put(b).put(c)` 时无法察觉中间丢失。因此 shim 在每次
+`hashmap_set` 之后检查 `hashmap_oom()`：置位就向 stderr 打印
+`hashmap: out of memory: put` 并 `abort()`；构造器的表分配失败同理，文案为
+`hashmap: out of memory: new`。
+
+调用方**不需要、也不能**处理 OOM：容器写入路径上不存在可恢复的失败。
+返回值只表达逻辑失败：键不存在（`HMAP_NOT_FOUND`）、参数非法（`HMAP_INVALID`）。
+需要 OOM 可恢复语义时不要选本包：`std::map` 的 `put` 返回 -1；`dict` 与本包一样终止。
 
 ## 6. 常见配方
 
@@ -161,14 +174,14 @@ ct install
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `put` 之后 `get` 不到 | 键内容被调用方改过，或比较的是字节而大小写不同 | 键按 `strcmp` 比较，区分大小写；`HashStrInt` 内部是副本，改原缓冲不影响已插入的键 |
-| 批量写入后 `status()` 是 `HMAP_OOM` | 链式 `put` 只暴露粘性状态，不指出第几次失败 | `clearStatus()` 后缩小批次重试 |
+| 进程在大量插入时退出，stderr 有 `hashmap: out of memory: put` | 内存不足，本包按共同契约终止进程 | 不是可捕获的错误；降低内存压力，或改用定容的 `std::map` |
 | 遍历拿到的指针读出错值 | 迭代期间发生了写操作 | v1 不支持迭代中写；先收集再改 |
 | 安装后编译报找不到 `hashmap.h` | 第三方目录被放进了 `vendor/` | 必须是 `third_party/`；`ct get` 会跳过 `vendor` |
-| 进程在大量插入时退出 | 本包不会 abort；检查是否混用了 `dict` | `dict` 的 OOM 语义是 abort，见该包文档 |
 
 ## 8. 限制与未支持
 
 - **没有自动析构**：包只提供 `release()`；调用方要用 `impl Drop` 得在自己的单元里写。
+- **OOM 直接终止进程**（与 `dict` 相同），没有错误码或状态可查；写入路径上不存在可恢复的 OOM（§5.5）。
 - **迭代中不能删除**，也没有 `hashmap_scan` 回调（语言无闭包）。
 - **迭代器借出的指针会失效**：任何写操作之后都不能再用。
 - **不拥有 `void *` 指向的对象**，也不提供 `free_fn`（与 `std::map` 的 `MapIntPtr` 不同）。
@@ -184,5 +197,7 @@ ct install
 ### 0.1.0（2026-11-08，未发布）
 
 - S0：需求与骨架。`ct.pkg`、9 节 README、契约 `.m.ct` / `.h.ct`、`tests/` 占位。
-- 未写实现、未拷第三方源码、未 commit、未打 tag、未 push。
+- OOM 语义统一为进程终止（与 `dict` 一致）：公开面不提供 `status()` / `clearStatus()`，
+  `HMAP_OOM` 撤销。
+- 未写实现、未拷第三方源码、未打 tag、未 push。
 - 首个 tag 为 `v0.1.0`，在此之前完成设计文档 §10 的 S1.0–S1.5。

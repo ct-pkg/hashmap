@@ -20,9 +20,21 @@
    而**覆盖与删除不调用 `elfree`**（上游把旧条目拷进 `spare` 返回，`hashmap.c:351-371`），
    必须由 shim 在调用返回后释放旧条目里的键副本。`void *` 值只拷贝指针本身，
    指向的对象仍归调用方。这条必须在 README 第一屏出现。
-4. **OOM 必须单独查询**：`hashmap_set` 用 `NULL` 同时表示"没有旧值"和"分配失败"，
-   只有 `hashmap_oom()` 能区分（`hashmap.c:293-296`, `:394-398`）。链式 `put` 因此采用
-   **粘性状态**：OOM 置位后后续 `put` 不再写入，直到 `clearStatus()`。
+4. **OOM = 进程终止**（与 `dict` 的共同契约，见 §6）。
+   - 检出点：`hashmap_set` 返回 `NULL` 时无法区分"键是新的"与"分配失败"，只有
+     `hashmap_oom()` 能区分（`hashmap.c:293-296`, `:394-398`）。shim 在**每次** `put`
+     调用 `hashmap_set` 之后立即检查：结果为 `NULL` 且 `hashmap_oom()` 为真，就向 stderr
+     打印 `hashmap: out of memory: put` 并 `abort()`。
+   - 公开面因此没有 `status()` / `clearStatus()`，也没有粘性状态机。链式
+     `t.put(a).put(b).put(c)` 的每一步要么成功，要么进程已经结束，不存在"中途丢了、
+     调用方不知道"的中间态。
+   - **为何选终止**：链式 `put` 返回接收者本身，没有错误码通道。被否决的软失败方案有两条：
+     （a）粘性状态 + `clearStatus()`——中间失败在链上看不见，只能事后 `status()`，错误被
+     推迟且更难定位，还多两个方法、一个状态字段与每条写入一次分支；
+     （b）把 `put` 改成返回 `int`——放弃链式，与 ct-pkg 的 OO 默认准则冲突（裁决 D-1），
+     并且每个调用点都要写检查。三种方案的代价对比见 §6。
+   - 结论：**调用方不需要、也不能处理 OOM**。容器写入路径上不存在可恢复的 OOM，
+     与 `dict` 完全一致（`dict/docs/design.md` §6 是本契约的另一半）。
 5. **迭代只读**：上游明确写了"迭代中 `hashmap_delete` 会重排桶，游标必须重置"
    （`hashmap.c:413-424`）。v1 不提供迭代中删除；需要删除时先收集键，结束后再删。
 6. **不提供自动析构**：包只给显式 `release()`；`impl Drop` 由调用方单元自己写（内建 `Drop`
@@ -117,8 +129,10 @@
 | --- | ---: | --- |
 | `HMAP_OK` | 0 | 成功 |
 | `HMAP_NOT_FOUND` | 1 | 键不存在 |
-| `HMAP_OOM` | 2 | 分配失败（粘性，见 §6） |
 | `HMAP_INVALID` | 3 | 参数非法（空键、空句柄） |
+
+`HMAP_OOM`（值 2）随 §6 的裁决**撤销，编号不复用**；它不再出现在任何返回值里。
+S0 骨架里的这个常量与 `status` / `clearStatus` 声明在 S1 一并删除（本轮只改文档）。
 
 ### 4.1 `namespace hashmap`（`Lib`）
 
@@ -129,7 +143,7 @@
 | `newIntPtr` | `HashIntPtr *newIntPtr(int initialCapacity)` | 同上 |
 | `newIntPtrSeeded` | `HashIntPtr *newIntPtrSeeded(int initialCapacity, long long seed0, long long seed1)` | 同上 |
 
-失败（分配不到表）返回 `0`。固定种子 0/0 让测试可复现，但**对攻击者可控的键不设防**
+失败（分配不到表）即终止进程，不返回 0（§6）。固定种子 0/0 让测试可复现，但**对攻击者可控的键不设防**
 （哈希洪泛）；面向不可信输入时必须用 `*Seeded`。
 
 ### 4.2 `HashStrInt *`
@@ -142,8 +156,6 @@
 | `del` | `int del(const char *key)` | 返回 `HMAP_OK` / `HMAP_NOT_FOUND` |
 | `len` | `int len()` | 条目数 |
 | `clear` | `HashStrInt *clear()` | 清空条目，保留桶数组；返回接收者 |
-| `status` | `int status()` | 最近一次数据操作的状态；OOM 粘性 |
-| `clearStatus` | `HashStrInt *clearStatus()` | 清掉粘性 OOM，返回接收者 |
 | `iter` | `HashStrIntIter *iter()` | 新建只读迭代器 |
 | `release` | `void release()` | 释放表与全部键副本 |
 
@@ -181,6 +193,14 @@
 
 ## 6. 失败与 OOM 语义
 
+**共同契约（与 `dict` 同一语义）**：容器写入路径上不存在可恢复的 OOM。
+
+- `dict` 一侧：`dict.c` 的分配点没有 `NULL` 分支，`zmalloc` 默认 handler 打印后 `abort()`，
+  没有软失败的余地（`dict/docs/design.md` §6）。
+- 本包一侧：失败其实**检得出来**（`hashmap_oom()`），但链式 `put` 没有错误码通道，
+  检出来也只能变成"静默丢失 + 事后查状态"。两个包统一为终止进程，调用方的写路径规则一致：
+  **要么成功，要么进程已经不在**。
+
 上游事实：
 
 - `hashmap_set` 返回 `NULL` 有两种含义：键是新的，或分配失败；只有 `hashmap_oom()` 能区分
@@ -189,26 +209,36 @@
 
 本包契约：
 
-1. `put` 返回接收者，单次失败不在返回值上可见。**OOM 是粘性的**：第一次置位
-   `HMAP_OOM` 后，后续 `put` 直接返回接收者且不再尝试写入；`get` / `del` / `len` 仍然可用。
-2. 解除粘性只能靠 `clearStatus()`；它返回接收者，可插在链尾：
-   `h.clearStatus().put(...).put(...)`。
-3. 链尾检查写成 `if (h.status() == HMAP_OOM) { ... }`。一次链式批量写入只会看到"是否曾经
-   失败"，不区分第几次——这是链式的代价，README §7 要写清楚。
-4. `get` / `del` 不分配，不会产生 OOM；`new*` 分配失败返回 0。
-5. 不做"自动重试"或"扩容失败回落"：上游已经保证扩容失败时旧数据仍可读、旧值不被破坏。
+1. **OOM = 进程终止**。shim 在每次 `put` 的 `hashmap_set` 返回后检查：
+   `set` 结果为 `NULL` 且 `hashmap_oom()` 为真时，向 stderr 打印
+   `hashmap: out of memory: put` 并 `abort()`。公开面不提供错误码，也不提供状态查询。
+2. 构造器同理：`new*` 的表分配失败直接终止（打印 `hashmap: out of memory: new`），
+   不返回 0；因此 `HMAP_OOM` 从状态码中撤销（§4）。
+3. 返回值只表达逻辑失败：`HMAP_NOT_FOUND`（键不存在）、`HMAP_INVALID`（空键 / 空句柄）。
+4. `get` / `del` / `len` / 迭代不分配，不会触发终止；`del` 的缩容失败由上游吞掉，不影响
+   数据完整性。
+5. 不做自动重试、不做扩容失败回落、不做粘性状态机：终止之后没有"状态"可言。
+
+**为何选终止（被否决方案与代价）**：
+
+| 方案 | 代价 | 结论 |
+| --- | --- | --- |
+| 粘性状态 + `clearStatus()` | `t.put(a).put(b).put(c)` 中间失败不可见，只能事后 `status()`；多两个方法、一个状态字段、每条写入一次分支 | 否决：错误被推迟且更难定位 |
+| `put` 返回 `int` | 放弃链式，与 ct-pkg 的 OO 默认准则冲突（裁决 D-1）；每个调用点都要写检查 | 否决 |
+| 终止进程 | 调用方无法降级；写入路径简化为"成功或进程结束" | **采用**，与 `dict` 一致 |
 
 > **裁决 D-1（2026-11-08，已定）**：按 ct-pkg 默认的 OO / 链式准则执行——`put` / `clear` /
-> `setLoadFactor` 返回接收者，OOM 用粘性状态 + `clearStatus()` 暴露。
-> `map-options.md` §4.3 / §7 的"不做链式"是 ct 仓写的规划文字，与 ct-pkg 的 OO 默认准则
-> 冲突时以 ct-pkg 为准；这不是笔误。若将来要改回逐次可见的 `int` 返回值，方法表不变，
-> 只改返回类型与 4 行 mapping。
+> `setLoadFactor` 返回接收者。`map-options.md` §4.3 / §7 的"不做链式"是 ct 仓写的规划文字，
+> 与 ct-pkg 的 OO 默认准则冲突时以 ct-pkg 为准；这不是笔误。链式本身不附带错误通道，
+> OOM 因此按本节终止处理（原 D-1 附带的"粘性状态 + `clearStatus()`"已被本节取代）。
+> 若将来要改回逐次可见的 `int` 返回值，方法表不变，只改返回类型与 mapping。
 
 ---
 
 ## 7. shim 数量估算
 
-设每种形状的公开方法数为 14（句柄 10 + 迭代器 4），`namespace` 构造器 4 个。
+设每种形状的公开方法数为 12（句柄 8 + 迭代器 4），`namespace` 构造器 4 个。
+（无 `status` / `clearStatus`，见 §6。）
 
 | 项 | `HashStrInt` | `HashIntPtr` | 新增一种形状 |
 | --- | ---: | ---: | ---: |
@@ -220,10 +250,10 @@
 | 覆盖/删除后的旧键回收 | 2 处内联（`put` / `del` 各一处） | 0 | 形状相关 |
 | 构造器 | 2（普通 + seeded） | 2 | +2 |
 | 迭代器包装 | 1 | 1 | +1 |
-| mapping 行 | 14 | 14 | +14 |
+| mapping 行 | 12 | 12 | +12 |
 
-合计：**C 侧 15 个对象**（8 + 7）+ **32 行 mapping**（14×2 + 4 个构造器）+ 1 个 shim 头。
-新增形状的成本是"1 个 item 结构 + 1 组 hash/compare + 1 个构造器 + 14 行 mapping"，
+合计：**C 侧 13 个对象**（7 + 6）+ **28 行 mapping**（12×2 + 4 个构造器）+ 1 个 shim 头。
+新增形状的成本是"1 个 item 结构 + 1 组 hash/compare + 1 个构造器 + 12 行 mapping"，
 与已有形状数无关；没有泛型，所以这个成本无法消除。
 
 ---
@@ -238,7 +268,7 @@
 | 指针值 | 借用，可配 `free_fn` | 借用，不配 `free_fn` | 借用 |
 | 删除 | 无单条删除 | `del` | `del` |
 | 遍历 | v1 无 | 只读迭代器 | safe iterator，可删当前 |
-| OOM | `put` 返回 -1 | 粘性状态 | 进程 abort |
+| OOM | `put` 返回 -1 | **进程 abort（与 `dict` 相同）** | 进程 abort |
 
 ---
 
@@ -247,6 +277,7 @@
 - 不做统一 `Map` trait / 抽象层（所有权语义与 `dict` 不同，且无泛型）。
 - 不做自动析构 / `Drop`。
 - 不做线程安全与内置锁；`hashmap.c` 本身明确 NOT THREAD SAFE。
+- 不做 OOM 软失败、粘性状态、`clearStatus()`：OOM 直接终止（§6，与 `dict` 同一契约）。
 - 不做迭代中删除、不做 `hashmap_scan` 回调（CT 无闭包）。
 - 不做自定义 allocator 的公开入口（上游 `hashmap_set_allocator` 是进程级全局，公开会污染
   整个进程；只在测试夹具里用）。
@@ -270,8 +301,9 @@
 
 ### S1.1 · `HashStrInt` 核心
 
-- 落地 `newStrInt*` / `put` / `get` / `del` / `len` / `clear` / `status` / `clearStatus` /
-  `release`。
+- 落地 `newStrInt*` / `put` / `get` / `del` / `len` / `clear` / `release`；
+  同时删掉 S0 骨架 [_HashMap.m.ct_](../hashmap/HashMap.m.ct) 里的 `status` / `clearStatus`
+  与 [_HashMapTypes.h.ct_](../hashmap/HashMapTypes.h.ct) 里的 `HMAP_OOM`（§6 的裁决）。
 - 测试：插入、覆盖、删除、清空、重复 `release(0)`；`put` 后立刻 `free` 调用方键缓冲，
   再 `get` 仍命中（证明 strdup）；`clear` 后 `len == 0` 且旧键不可查。
 - **同一个键覆盖 10 万次、删除 10 万次**，泄漏门禁必须为 0 增长：上游不会为覆盖/删除调用
@@ -294,8 +326,9 @@
 ### S1.4 · 扩容与 OOM
 
 - 容量 0 起步，插入 10 万条，扩容后旧键全部可读。
-- 用测试专用 C 夹具注入第 N 次分配失败：`status()` 变 `HMAP_OOM`，粘性生效，
-  `clearStatus()` 后可继续写入。
+- 用测试专用 C 夹具注入第 N 次分配失败：在子进程里执行写入，断言子进程以 `abort`
+  终止，且 stderr 含 `hashmap: out of memory: put`。构造器注入失败同理，文案为
+  `hashmap: out of memory: new`。没有"返回值可检查"的路径，这正是 §6 的契约。
 
 ### S1.5 · 文档与安装态
 
@@ -311,7 +344,7 @@
 | --- | --- | --- |
 | R-1 | 上游只拷贝 `elsize` 字节，误以为键字符串也被拷贝 → 悬垂 | §3.2 + S1.1 的 free-then-get 测试 |
 | R-2 | 固定种子 0/0 对不可信键不设防 | 提供 `*Seeded` 构造器，README 写明 |
-| R-3 | 链式 `put` 掩盖单次 OOM | 粘性状态 + `clearStatus()`，README §7 |
+| R-3 | OOM 终止进程，调用方无法降级 | §6 明示为与 `dict` 的共同契约；README §5.5 与排错表 |
 | R-4 | 迭代中删除导致游标失效 | v1 明确不支持，S1.3 写在配方里 |
 | R-5 | `len()` 用 `int` 承载 `size_t` | 文档写明上限 2^31-1；超出不在支持范围 |
 | R-6 | `pub type` 依赖 ct 0.20.3，尚未在本包实测 | S1.0 探针；失败则退回 shim typedef + 0.20.0 |

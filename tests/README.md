@@ -12,7 +12,7 @@ Planned suites (S1, see [../docs/design.md](../docs/design.md) §10):
 | `intptr.ct` | `HashIntPtr`: pointer values are copied shallowly, pointee never freed |
 | `iter.ct` | each key visited exactly once; collected-then-deleted recipe |
 | `grow.ct` | 100k inserts from capacity 0; every old key readable after resizing |
-| `oom.ct` | injected allocator failure: sticky `HMAP_OOM`, `clearStatus()` recovers |
+| `oom.ct` | injected allocator failure: a child process aborts with `hashmap: out of memory: put` (no recoverable OOM) |
 
 `run.sh` will build every suite with `-Wall -Wextra` and fail on any warning.
 The leak gate must be proven by mutation: removing the `elfree` hook has to turn
