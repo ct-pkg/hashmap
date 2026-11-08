@@ -1,0 +1,226 @@
+/*
+ * docs.ct - the CT snippets that appear in README §5 and §6, compiled and run.
+ *
+ * Each function below is quoted verbatim in the README (the block is the body,
+ * the README names the function). Keeping them here means a README snippet is
+ * never the first place a reader compiles it: `tests/run.sh` builds this file
+ * with -Wall -Wextra and asserts the effects.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+/* ---- README §5.1 构造与容量提示 ---- */
+void snippet_construct(void)
+{
+    /* ==== README-BEGIN §5.1 ==== */
+    HashStrInt *h = hashmap::Lib.newStrInt(0);
+    HashStrInt *big = hashmap::Lib.newStrInt(4096);
+    /* ==== README-END §5.1 ==== */
+    check(h != 0 && big != 0, "README 5.1: both constructors return handles");
+    check(h.len() == 0 && big.len() == 0, "README 5.1: both tables start empty");
+    h.release();
+    big.release();
+}
+
+/* ---- README §5.2 写入与读回 ---- */
+void snippet_write_read(HashStrInt *h)
+{
+    /* ==== README-BEGIN §5.2 ==== */
+    h.put("alice", 30).put("bob", 25);
+    int v;
+    int st = h.get("bob", &v);
+    if (h.get("alice", 0) == HMAP_OK) {
+        /* 存在，继续业务 */
+    }
+    /* ==== README-END §5.2 ==== */
+    check(st == HMAP_OK && v == 25, "README 5.2: get bob is 25");
+}
+
+/* ---- README §5.4 删除 ---- */
+void snippet_delete(HashStrInt *h)
+{
+    /* ==== README-BEGIN §5.4 ==== */
+    int st = h.del("bob");   /* HMAP_OK；再删一次得到 HMAP_NOT_FOUND */
+    /* ==== README-END §5.4 ==== */
+    check(st == HMAP_OK, "README 5.4: del bob returns HMAP_OK");
+    check(h.del("bob") == HMAP_NOT_FOUND, "README 5.4: a second del misses");
+}
+
+/* ---- README §5.5 清空与释放 ---- */
+void snippet_clear_release(void)
+{
+    /* ==== README-BEGIN §5.5 ==== */
+    HashStrInt *h = hashmap::Lib.newStrInt(0).put("old", 1);
+    h.clear().put("carol", 41);
+    h.release();
+    /* ==== README-END §5.5 ==== */
+}
+
+/* ---- README §5.6 遍历 ---- */
+void snippet_iterate(HashStrInt *h)
+{
+    /* ==== README-BEGIN §5.6 ==== */
+    int count = 0;
+    HashStrIntIter *it = h.iter();
+    while (it.next()) {
+        count = count + 1;
+    }
+    it.release();
+    /* ==== README-END §5.6 ==== */
+    check(count == h.len(), "README 5.6: the walk visits len entries");
+}
+
+/* ---- README §5.9 链式返回 ---- */
+void snippet_chain(void)
+{
+    HashStrInt *h = hashmap::Lib.newStrInt(0);
+    /* ==== README-BEGIN §5.9 ==== */
+    h.setLoadFactor(0.75).put("a", 1).put("b", 2);
+    /* ==== README-END §5.9 ==== */
+    check(h.len() == 2, "README 5.9: the setup chain writes both keys");
+    h.release();
+}
+
+/* ---- README §6.1 遍历中删除：先收集，再删 ---- */
+int recipe_collect_then_delete(HashStrInt *h)
+{
+    /* ==== README-BEGIN §6.1 ==== */
+    char collected[160][32];
+    int count = 0;
+    int i;
+    HashStrIntIter *it = h.iter();
+    while (it.next()) {
+        strcpy(collected[count], it.key());
+        count = count + 1;
+    }
+    it.release();
+
+    for (i = 0; i < count; i = i + 1) {
+        h.del(collected[i]);
+    }
+    /* ==== README-END §6.1 ==== */
+    return count;
+}
+
+/* ---- README §6.2 计数器 / 多重集 ---- */
+void recipe_increment(HashStrInt *h, const char *w)
+{
+    /* ==== README-BEGIN §6.2 ==== */
+    int old;
+    if (h.get(w, &old) == HMAP_OK) {
+        h.put(w, old + 1);
+    } else {
+        h.put(w, 1);
+    }
+    /* ==== README-END §6.2 ==== */
+}
+
+/* ---- README §6.3 每轮请求复用一张表 ---- */
+void recipe_reuse(HashStrInt *h)
+{
+    /* ==== README-BEGIN §6.3 ==== */
+    h.clear().put("q", 1).put("r", 2);
+    /* ==== README-END §6.3 ==== */
+}
+
+/* ---- README §6.4 对不可信输入使用 seeded 构造器 ---- */
+HashStrInt *recipe_seeded(void)
+{
+    /* ==== README-BEGIN §6.4 ==== */
+    HashStrInt *h = hashmap::Lib.newStrIntSeeded(0, 123, 456);
+    /* ==== README-END §6.4 ==== */
+    return h;
+}
+
+/* ---- README §6.5 用整数键索引对象池 ---- */
+void *recipe_lookup(HashIntPtr *by_id, int id)
+{
+    /* ==== README-BEGIN §6.5 ==== */
+    void *found;
+    if (by_id.get(id, &found) == HMAP_OK) {
+        return found;
+    }
+    return 0;
+    /* ==== README-END §6.5 ==== */
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    HashStrInt *seeded;
+    HashIntPtr *by_id;
+    int a;
+    int b;
+    int removed;
+    int i;
+    void *found;
+
+    a = 10;
+    b = 20;
+
+    snippet_construct();
+    snippet_clear_release();
+    snippet_chain();
+
+    h = hashmap::Lib.newStrInt(0);
+    snippet_write_read(h);
+    snippet_iterate(h);
+    snippet_delete(h);
+    check(h.len() == 1, "README 5.4: bob is the only removed entry");
+
+    /* recipes */
+    h.clear();
+    for (i = 0; i < 137; i = i + 1) {
+        char key[32];
+        snprintf(key, 32, "k%d", i);
+        h.put(key, i);
+    }
+    removed = recipe_collect_then_delete(h);
+    check(removed == 137, "README 6.1: the recipe collected all 137 keys");
+    check(h.len() == 0, "README 6.1: the recipe empties the table");
+
+    recipe_increment(h, "word");
+    recipe_increment(h, "word");
+    recipe_increment(h, "other");
+    check(h.get("word", &a) == HMAP_OK && a == 2, "README 6.2: word counted twice");
+    check(h.get("other", &b) == HMAP_OK && b == 1, "README 6.2: other counted once");
+
+    recipe_reuse(h);
+    check(h.len() == 2, "README 6.3: reuse leaves the new batch");
+
+    seeded = recipe_seeded();
+    seeded.put("s", 1);
+    check(seeded.get("s", 0) == HMAP_OK, "README 6.4: seeded table works");
+    seeded.release();
+
+    by_id = hashmap::Lib.newIntPtr(0);
+    by_id.put(1, &a).put(2, &b);
+    found = recipe_lookup(by_id, 2);
+    check(found == &b, "README 6.5: lookup returns the stored pointer");
+    check(recipe_lookup(by_id, 3) == 0, "README 6.5: a missing id returns 0");
+    by_id.release();
+
+    h.release();
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

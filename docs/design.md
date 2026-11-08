@@ -1,10 +1,16 @@
 # hashmap 模块需求与设计（S0）
 
 - 日期：2026-11-08
-- 状态：**需求与骨架**。本轮不写实现、不拷第三方源码、不发布 tag
+- 状态：**需求与骨架（S0）**；实现见 [implementation.md](implementation.md)
 - 目标包：`hashmap`（`ct-pkg/hashmap`），仓库 https://github.com/ct-pkg/hashmap
 - 上游：https://github.com/tidwall/hashmap.c ，核对基线 commit
   `3735986914fc1c4e6a9123b406d0970666aa4aec`（2026-11-08 的 `master`）
+- 修订（2026-11-08，裁决 Q1/Q3）：键的合法性只由指针决定——`NULL` 非法，`len == 0`
+  的合法指针（`""`）合法，§3.2 / §4 / §6 已统一为此口径。
+- 修订（2026-11-08，第二轮对抗评审）：迭代器 `key()` 改为 `const char *`（§4.3）；
+  `clear()` 改为保留桶数组（§3.1）；`where` 明确为诊断信息、不是契约（§6）。
+- 文中不再内嵌 `hashmap.c` 行号：行号只有**一份**，见 [implementation.md](implementation.md)
+  §3 的行号表；语义描述不受行号漂移影响。
 - 选型依据：`ct/docs/design/map-options.md`（提交 `c568c71`）§3.B / §4 / §6.S1
 
 ---
@@ -16,13 +22,13 @@
 2. **两种形状**：`HashStrInt`（`char *` → `int`）与 `HashIntPtr`（`int` → `void *`），
    与 `std::map` 的 `MapStrInt` / `MapIntPtr` 对齐，便于同一场景对照迁移。
 3. **"拷贝"要拆开讲**：上游只拷贝 `elsize` 字节的条目结构，**不深拷贝键指向的内容**。
-   因此 `char *` 键由 shim 用 `strdup` 深拷贝；`clear()` / `release()` 靠 `elfree` 回收，
-   而**覆盖与删除不调用 `elfree`**（上游把旧条目拷进 `spare` 返回，`hashmap.c:351-371`），
-   必须由 shim 在调用返回后释放旧条目里的键副本。`void *` 值只拷贝指针本身，
-   指向的对象仍归调用方。这条必须在 README 第一屏出现。
+   因此 `char *` 键由 shim 深拷贝（`malloc` + `memcpy`）；`clear()` / `release()` 靠
+   `elfree` 回收，而**覆盖与删除不调用 `elfree`**（上游把旧条目拷进 `spare` 返回，
+   行号见 `docs/implementation.md` §3），必须由 shim 在调用返回后释放旧条目里的键副本。
+   `void *` 值只拷贝指针本身，指向的对象仍归调用方。这条必须在 README 第一屏出现。
 4. **OOM = 进程终止**（与 `dict` 的共同契约，见 §6）。
    - 检出点：`hashmap_set` 返回 `NULL` 时无法区分"键是新的"与"分配失败"，只有
-     `hashmap_oom()` 能区分（`hashmap.c:293-296`, `:394-398`）。shim 在**每次** `put`
+     `hashmap_oom()` 能区分（行号见 `docs/implementation.md` §3）。shim 在**每次** `put`
      调用 `hashmap_set` 之后立即检查：结果为 `NULL` 且 `hashmap_oom()` 为真，就向 stderr
      打印 `hashmap: out of memory: put` 并 `abort()`。
    - 公开面因此没有 `status()` / `clearStatus()`，也没有粘性状态机。链式
@@ -36,7 +42,7 @@
    - 结论：**调用方不需要、也不能处理 OOM**。容器写入路径上不存在可恢复的 OOM，
      与 `dict` 完全一致（`dict/docs/design.md` §6 是本契约的另一半）。
 5. **迭代只读**：上游明确写了"迭代中 `hashmap_delete` 会重排桶，游标必须重置"
-   （`hashmap.c:413-424`）。v1 不提供迭代中删除；需要删除时先收集键，结束后再删。
+   （行号见 `docs/implementation.md` §3）。v1 不提供迭代中删除；需要删除时先收集键，结束后再删。
 6. **不提供自动析构**：包只给显式 `release()`；`impl Drop` 由调用方单元自己写（内建 `Drop`
    发射为 `static`，包单元不可见）。
 7. **公开面零 C 类型**：两个句柄都是 `pub type ... = struct ct_hashmap_*;` 的包装结构，
@@ -86,22 +92,29 @@
 - `newStrInt` / `newIntPtr` 返回的句柄由调用方唯一拥有；`release()` 释放表与全部条目。
 - `release(0)` 是空操作，便于统一清理路径；非空句柄只允许 `release()` 一次。
 - **没有自动析构**。包内不实现 `Drop`，原因见 §0-6。
-- `clear()` 清空条目但保留当前桶数组（`hashmap_clear(map, false)`），便于复用。
+- `clear()` 清空条目但保留当前桶数组（`hashmap_clear(map, true)`），便于复用。
+  代价是峰值内存不还给 OS：表长到 N 个桶后，`clear()` 仍占着这些桶，直到 `release()`。
+  注：上游的 `update_cap = false` 会缩回构造时的 `cap`，与本包文档的"保留桶数组"相反，
+  因此这里必须传 `true`。
 
 ### 3.2 `HashStrInt` 的键
 
-上游 `hashmap_new(elsize, ...)` 只按 `elsize` 字节拷贝条目（`hashmap.c:34`、
-`:107-112` 的 `bucketsz`、`:262` 的 `memcpy(..., elsize)`），所以"拷贝"**不等于**拷贝字符串内容。本包的规则：
+上游 `hashmap_new(elsize, ...)` 只按 `elsize` 字节拷贝条目，所以"拷贝"**不等于**拷贝字符串内容
+（行号见 `docs/implementation.md` §3）。本包的规则：
 
-- `put("abc", 1)` 时 shim 在 item 里保存 `strdup("abc")` 的结果；
+- `put("abc", 1)` 时 shim 在 item 里保存一份 `malloc` + `memcpy` 的 `"abc"` 副本；
 - `clear()` / `release()` 由 `elfree` 回调逐条 `free`；
 - **覆盖与删除不会被上游自动回收**：`hashmap_set` / `hashmap_delete` 把旧条目拷进
-  `map->spare` 后返回（`hashmap.c:351-371`, `:378-380`），不调用 `elfree`。因此
+  `map->spare` 后返回，不调用 `elfree`（行号见 `docs/implementation.md` §3）。因此
   shim 在拿到非 `NULL` 返回值后立刻 `free` 旧 item 的键副本；晚一步（下一次调用覆盖
   `spare`）就泄漏。这是 S1 必须用测试钉死的点；
 - 因此 `put` 返回后调用方可以立刻释放自己的键缓冲区；
 - 重复键按字节比较（`strcmp`），**大小写敏感**，不做长度前缀或二进制键；
   键按 C 字符串处理，**不允许内嵌 `0x00`**（哈希与比较都按 `strlen` 截断）。
+- **键的合法性只由指针决定**（裁决 Q1）：`NULL` 非法——`get` / `del` 返回
+  `HMAP_INVALID`，链式 `put` 没有错误通道而静默忽略；长度为 0 的合法指针（`""`）
+  是正常键。上游接口是「指针 + 长度」的字节切片，长度 0 是切片的自然结果，
+  不单独设特例。修订前「空键非法」的表述已废弃。
 
 ### 3.3 `HashIntPtr` 的值
 
@@ -117,6 +130,8 @@
 
 - `iter.key()` / `iter.value()` 指向表内部条目，**任何后续 `put` / `del` / `clear` 都会使其失效**
   （上游 README 明确"DO NOT RETAIN POINTERS RETURNED BY HASHMAP CALLS"）；
+- `key()` 返回 `const char *`：内容是表用来哈希与比较的字节，只读借出。可写指针会让
+  `key()[0] = 'X'` 静默写坏表（`get` / `del` / 遍历都找不到，`len` 却不变）；
 - 迭代器自身需要 `release()`；`release(0)` 空操作。
 
 ---
@@ -129,11 +144,11 @@
 | --- | ---: | --- |
 | `HMAP_OK` | 0 | 成功 |
 | `HMAP_NOT_FOUND` | 1 | 键不存在 |
-| `HMAP_INVALID` | 2 | 参数非法（空键、空句柄） |
+| `HMAP_INVALID` | 2 | 参数非法：句柄为 `NULL`，或 `get` / `del` 的键为 `NULL`（`""` 是合法键，§3.2） |
 
 枚举值紧凑为 0 / 1 / 2，与 `dict` 的 `DICT_OK` / `DICT_NOT_FOUND` / `DICT_INVALID`
 一一对应。原先留给 OOM 的编号 2 已删除并由 `HMAP_INVALID` 接续：不保留空位，也不复用旧语义；
-包未发布，编号前移没有兼容负担。状态码里没有 OOM 项——内存不足直接终止进程（§6）。
+`0.1.0` 是首个发布版本，编号前移没有兼容负担。状态码里没有 OOM 项——内存不足直接终止进程（§6）。
 
 ### 4.1 `namespace hashmap`（`Lib`）
 
@@ -151,7 +166,7 @@
 
 | 方法 | 签名 | 说明 |
 | --- | --- | --- |
-| `setLoadFactor` | `HashStrInt *setLoadFactor(double factor)` | 上游夹到 `[0.50, 0.95]`（`hashmap.c:57-64`），NaN 忽略；返回接收者 |
+| `setLoadFactor` | `HashStrInt *setLoadFactor(double factor)` | 上游夹到 `[0.50, 0.95]`，NaN 忽略（实现见 `implementation.md` §3）；返回接收者 |
 | `put` | `HashStrInt *put(const char *key, int value)` | 插入或覆盖；键被深拷贝；返回接收者 |
 | `get` | `int get(const char *key, int *out)` | `out` 可为 0，此时只判存在性 |
 | `del` | `int del(const char *key)` | 返回 `HMAP_OK` / `HMAP_NOT_FOUND` |
@@ -165,7 +180,7 @@
 | 方法 | 签名 | 说明 |
 | --- | --- | --- |
 | `next` | `int next()` | 1 = 有当前条目，0 = 结束 |
-| `key` | `char *key()` | 借用；无当前条目或已失效时返回 0 |
+| `key` | `const char *key()` | 借用且只读；**仅在 `next()` 返回 1 时有效**。之后任何写入（`put` / `del` / `clear`）都会使其失效，不保证仍是原指针 |
 | `value` | `int value()` | 当前条目的值；无当前条目时返回 0 |
 | `release` | `void release()` | 释放游标 |
 
@@ -177,13 +192,15 @@
 - `int get(int key, void **out)`；
 - `int del(int key)`；
 - `IntPtrIter.value()` 返回 `void *`。
+- `IntPtrIter.key()` 返回 `int`：合法键 `0` 与「未定位」都得到 `0`，二者不可区分；
+  需要区分时先看 `next()` 的返回值。
 
 ---
 
 ## 5. 迭代与删除
 
 - v1 **只读遍历**。上游 `hashmap_iter` 的游标是 `size_t` + 当前 item 指针
-  （`hashmap.c:413-424`）；迭代中 `hashmap_delete` 会重排桶并使游标失效。
+  （行号见 `implementation.md` §3）；迭代中 `hashmap_delete` 会重排桶并使游标失效。
 - 需要"遍历中删除"时，调用方先把键拷到自己的容器，结束后再逐个 `del`。这是 20 行以内的
   用户侧代码，不引入第二套迭代协议。
 - 迭代器创建后、`release()` 前，表上的任何写操作都使 `key()` / `value()` 失效；文档与测试
@@ -205,8 +222,8 @@
 上游事实：
 
 - `hashmap_set` 返回 `NULL` 有两种含义：键是新的，或分配失败；只有 `hashmap_oom()` 能区分
-  （`hashmap.c:293-296` 的注释，`:394-398` 的实现）。
-- `hashmap_delete` 期间的缩容失败被上游刻意忽略，不影响数据完整性（`hashmap.c:365-370`）。
+  （行号见 `implementation.md` §3）。
+- `hashmap_delete` 期间的缩容失败被上游刻意忽略，不影响数据完整性（行号见 `implementation.md` §3）。
 
 本包契约：
 
@@ -215,10 +232,13 @@
    `hashmap: out of memory: put` 并 `abort()`。公开面不提供错误码，也不提供状态查询。
 2. 构造器同理：`new*` 的表分配失败直接终止（打印 `hashmap: out of memory: new`），
    不返回 0；因此状态码里没有 OOM 项（§4）。
-3. 返回值只表达逻辑失败：`HMAP_NOT_FOUND`（键不存在）、`HMAP_INVALID`（空键 / 空句柄）。
-4. `get` / `del` / `len` / 迭代不分配，不会触发终止；`del` 的缩容失败由上游吞掉，不影响
-   数据完整性。
-5. 不做自动重试、不做扩容失败回落、不做粘性状态机：终止之后没有"状态"可言。
+3. 迭代器包装的分配失败同样终止（打印 `hashmap: out of memory: iter`）。`where`
+   只用于定位现场，不是契约的一部分；三个站点都是显式 `abort()`。
+4. 返回值只表达逻辑失败：`HMAP_NOT_FOUND`（键不存在）、`HMAP_INVALID`（`NULL` 键 /
+   `NULL` 句柄；`""` 是合法键，见 §3.2）。
+5. `get` / `del` / `len` 不分配，不会触发终止；`del` 的缩容失败由上游吞掉，不影响
+   数据完整性。迭代器本身有一次包装分配（见第 3 条）。
+6. 不做自动重试、不做扩容失败回落、不做粘性状态机：终止之后没有"状态"可言。
 
 **为何选终止（被否决方案与代价）**：
 
@@ -264,7 +284,7 @@
 | --- | --- | --- | --- |
 | 容量 | `init` 定容，满即失败 | 自动增长 | 自动增长 |
 | 扩容 | 无 | 一次性搬全表 | 每次操作搬一点 |
-| 字符串键 | 借用指针 | **深拷贝（strdup）** | 借用指针 |
+| 字符串键 | 借用指针 | **深拷贝（malloc + memcpy）** | 借用指针 |
 | 指针值 | 借用，可配 `free_fn` | 借用，不配 `free_fn` | 借用 |
 | 删除 | 无单条删除 | `del` | `del` |
 | 遍历 | v1 无 | 只读迭代器 | safe iterator，可删当前 |
@@ -303,7 +323,7 @@
 
 - 落地 `newStrInt*` / `put` / `get` / `del` / `len` / `clear` / `release`。
 - 测试：插入、覆盖、删除、清空、重复 `release(0)`；`put` 后立刻 `free` 调用方键缓冲，
-  再 `get` 仍命中（证明 strdup）；`clear` 后 `len == 0` 且旧键不可查。
+  再 `get` 仍命中（证明深拷贝）；`clear` 后 `len == 0` 且旧键不可查。
 - **同一个键覆盖 10 万次、删除 10 万次**，泄漏门禁必须为 0 增长：上游不会为覆盖/删除调用
   `elfree`，这条用例专门钉住 §3.2 的手工回收。
 
@@ -330,9 +350,10 @@
 
 ### S1.5 · 文档与安装态
 
-- README 9 节骨架填满；所有代码块实测后写入，输出逐字一致。
+- README 10 节骨架填满；所有代码块实测后写入，输出逐字一致。
 - `ct get` / `ct install` 安装态验证：`third_party/` 被完整拷贝（目录名不能是 `vendor`）。
-- 取消 `index/packages.txt` 的注释，并推 `v0.1.0`（`ct.pkg` 的 `version` 已是 `0.1.0`）。
+- `v0.1.0` 已推送（`ct.pkg` 的 `version` 已是 `0.1.0`）；取消 `index/packages.txt`
+  注释由 index 维护流程单独执行。
 
 ---
 

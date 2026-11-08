@@ -1,0 +1,66 @@
+/*
+ * demo/main.ct - the smallest end-to-end tour: construction, chained writes,
+ * reads with the status codes, an overwrite, a delete, a walk and a borrowed
+ * pointer value. README examples are copies of this file.
+ *
+ * Output must match demo/expected.out; tests/run.sh diffs it and tools/check.sh
+ * repeats the diff against an installed copy of the package.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+
+int main(void)
+{
+    HashStrInt *ages;
+    HashStrIntIter *it;
+    HashIntPtr *owners;
+    int v;
+    int st;
+    int count;
+    int sum;
+    int alice;
+    int bob;
+    void *owner;
+
+    alice = 1;
+    bob = 2;
+
+    /* Configure and insert in one expression: every write returns the table. */
+    ages = hashmap::Lib.newStrInt(0).setLoadFactor(0.75);
+    ages.put("alice", 30).put("bob", 25).put("carol", 41);
+
+    st = ages.get("bob", &v);
+    printf("bob: status=%d age=%d len=%d\n", st, v, ages.len());
+
+    ages.put("bob", 26);
+    st = ages.get("bob", &v);
+    printf("bob after overwrite: status=%d age=%d len=%d\n", st, v, ages.len());
+
+    st = ages.del("alice");
+    printf("alice after del: status=%d len=%d\n", st, ages.len());
+
+    /* Walk without depending on the order: count and sum only. */
+    count = 0;
+    sum = 0;
+    it = ages.iter();
+    while (it.next()) {
+        count = count + 1;
+        sum = sum + it.value();
+    }
+    it.release();
+    printf("walk: count=%d sum=%d\n", count, sum);
+    ages.release();
+
+    /* A pointer value is copied, never owned: the pointee stays with us. */
+    owners = hashmap::Lib.newIntPtr(0);
+    owners.put(7, &alice).put(9, &bob);
+    st = owners.get(7, &owner);
+    printf("intptr: status=%d same=%d len=%d\n", st, owner == &alice, owners.len());
+    owners.release();
+
+    return 0;
+}

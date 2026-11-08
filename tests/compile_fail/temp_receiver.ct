@@ -1,0 +1,39 @@
+/*
+ * compile_fail/temp_receiver.ct - the chain shape ct v0.20.3 rejects.
+ *
+ * A chain whose root is a CT function call needs a compiler-generated
+ * temporary, and a temporary may only open a statement or an assignment. This
+ * file MUST FAIL to compile with:
+ *
+ *   a method call on a temporary is only allowed at the start of a statement
+ *   or of an assignment
+ *
+ * Note the exact boundary, measured on ct v0.20.3: a chain rooted in a
+ * namespace constructor (`hashmap::Lib.newStrInt(0).put(...)`) is fine even
+ * inside a call argument, because that root is already a call the compiler
+ * lowers directly; it is a user-defined CT function root that produces the
+ * temporary. The legal rewrite binds first:
+ *
+ *   h = make();
+ *   h.put("a", 1);
+ *
+ * tests/run.sh asserts both the failure and the message, so the limit stays
+ * measured rather than remembered. Do not "fix" this file.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+
+HashStrInt *make(void)
+{
+    return hashmap::Lib.newStrInt(0);
+}
+
+int main(void)
+{
+    printf("%p\n", make().put("a", 1));
+    return 0;
+}

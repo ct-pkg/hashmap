@@ -1,0 +1,5 @@
+bob: status=0 age=25 len=3
+bob after overwrite: status=0 age=26 len=3
+alice after del: status=0 len=2
+walk: count=2 sum=67
+intptr: status=0 same=1 len=2

@@ -1,10 +1,5 @@
 /*
- * HashMap - the dynamic hash map contract (S0 skeleton).
- *
- * This unit is the public contract only: handle aliases and trait signatures.
- * The `map trait ... for type ...` blocks and the shim land at S1, so this file
- * is intentionally not compilable yet -- importing it gets the reader the exact
- * method list in docs/design.md, nothing more.
+ * HashMap - a dynamically growing hash map, mapped onto tidwall/hashmap.c.
  *
  * Two monomorphic shapes, mirroring std::map's pair:
  *
@@ -15,14 +10,24 @@
  * single host cannot carry two `put` signatures (methods are keyed by
  * (host, name), and the signature does not disambiguate).
  *
+ * Every configuration / write method returns the receiver, so a setup chain and
+ * an insert chain each stay one expression:
+ *
+ *   h.setLoadFactor(0.75).put("alice", 30).put("bob", 25);
+ *   h.clear().put("carol", 41);
+ *
  * Ownership, invariant for the whole package:
  *   - an item is copied into the table;
- *   - a `char *` key is deep-copied by the shim (strdup + elfree), so the
- *     caller may free its buffer right after put();
+ *   - a `char *` key is deep-copied by the shim, so the caller may free its
+ *     buffer right after put();
  *   - a `void *` value is copied as a pointer only; the pointee stays with the
  *     caller and is never released by this package;
  *   - every handle is released explicitly. There is no `Drop`: a built-in Drop
  *     is emitted `static`, so a package unit cannot destroy a caller's value.
+ *
+ * Failure: OOM in the write path terminates the process (design §6). The
+ * status codes therefore only describe logical failures - HMAP_NOT_FOUND and
+ * HMAP_INVALID - and there is no status() to poll.
  */
 namespace hashmap;
 
@@ -56,7 +61,7 @@ pub trait StrIntMap {
 
 pub trait StrIntIter {
     int next();
-    char *key();
+    const char *key();
     int value();
     void release();
 }
@@ -80,4 +85,53 @@ pub trait IntPtrIter {
     int key();
     void *value();
     void release();
+}
+
+map trait StrIntMap for type HashStrInt * {
+    setLoadFactor(h, factor) -> ct_hashmap_strint_set_load_factor(h, factor);
+
+    put(h, key, value) -> ct_hashmap_strint_put(h, key, value);
+    get(h, key, out) -> ct_hashmap_strint_get(h, key, out);
+    del(h, key) -> ct_hashmap_strint_del(h, key);
+
+    len(h) -> ct_hashmap_strint_len(h);
+    clear(h) -> ct_hashmap_strint_clear(h);
+
+    iter(h) -> ct_hashmap_strint_iter_new(h);
+    release(h) -> ct_hashmap_strint_release(h);
+}
+
+map trait StrIntIter for type HashStrIntIter * {
+    next(it) -> ct_hashmap_strint_iter_next(it);
+    key(it) -> ct_hashmap_strint_iter_key(it);
+    value(it) -> ct_hashmap_strint_iter_value(it);
+    release(it) -> ct_hashmap_strint_iter_release(it);
+}
+
+map trait IntPtrMap for type HashIntPtr * {
+    setLoadFactor(h, factor) -> ct_hashmap_intptr_set_load_factor(h, factor);
+
+    put(h, key, value) -> ct_hashmap_intptr_put(h, key, value);
+    get(h, key, out) -> ct_hashmap_intptr_get(h, key, out);
+    del(h, key) -> ct_hashmap_intptr_del(h, key);
+
+    len(h) -> ct_hashmap_intptr_len(h);
+    clear(h) -> ct_hashmap_intptr_clear(h);
+
+    iter(h) -> ct_hashmap_intptr_iter_new(h);
+    release(h) -> ct_hashmap_intptr_release(h);
+}
+
+map trait IntPtrIter for type HashIntPtrIter * {
+    next(it) -> ct_hashmap_intptr_iter_next(it);
+    key(it) -> ct_hashmap_intptr_iter_key(it);
+    value(it) -> ct_hashmap_intptr_iter_value(it);
+    release(it) -> ct_hashmap_intptr_iter_release(it);
+}
+
+map trait Lib for namespace hashmap {
+    newStrInt(capacity) -> ct_hashmap_strint_new(capacity, 0, 0);
+    newStrIntSeeded(capacity, seed0, seed1) -> ct_hashmap_strint_new(capacity, seed0, seed1);
+    newIntPtr(capacity) -> ct_hashmap_intptr_new(capacity, 0, 0);
+    newIntPtrSeeded(capacity, seed0, seed1) -> ct_hashmap_intptr_new(capacity, seed0, seed1);
 }

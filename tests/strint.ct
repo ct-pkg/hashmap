@@ -1,0 +1,179 @@
+/*
+ * strint.ct - HashStrInt: constructors, put / get / del / len / clear,
+ * overwrite, the status codes and the chain contract.
+ *
+ * Run through tests/run.sh, which requires `SUMMARY passed=N failed=0` and a
+ * warning-free build.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    HashStrInt *same;
+    HashStrInt *z;
+    HashStrIntIter *it;
+    int v;
+    int st;
+
+    /* ---------------- construction ---------------- */
+
+    h = hashmap::Lib.newStrInt(0);
+    check(h != 0, "newStrInt(0) returns a handle");
+    check(h.len() == 0, "a fresh table has len 0");
+    it = h.iter();
+    check(it != 0, "iter() on a fresh table returns a cursor");
+    it.release();
+
+    same = h.setLoadFactor(0.75);
+    check(same == h, "setLoadFactor returns the receiver");
+    same = h.setLoadFactor(0.10);
+    check(same == h, "setLoadFactor below the floor still returns the receiver");
+    same = h.setLoadFactor(0.99);
+    check(same == h, "setLoadFactor above the ceiling still returns the receiver");
+
+    /* ---------------- insert / read ---------------- */
+
+    same = h.put("alice", 30);
+    check(same == h, "put returns the receiver");
+    h.put("bob", 25).put("carol", 41);
+    check(h.len() == 3, "three distinct keys give len 3");
+
+    v = -1;
+    st = h.get("alice", &v);
+    check(st == HMAP_OK, "get on an existing key returns HMAP_OK");
+    check(v == 30, "get writes the stored value");
+    v = -1;
+    check(h.get("bob", &v) == HMAP_OK && v == 25, "get bob");
+    check(h.get("carol", &v) == HMAP_OK && v == 41, "get carol");
+
+    v = -1;
+    st = h.get("nobody", &v);
+    check(st == HMAP_NOT_FOUND, "get on a missing key returns HMAP_NOT_FOUND");
+    check(v == -1, "a missing get leaves out untouched");
+
+    st = h.get("alice", 0);
+    check(st == HMAP_OK, "get with a null out only tests existence");
+    check(h.get("nobody", 0) == HMAP_NOT_FOUND, "null out on a missing key");
+
+    /* keys are compared as C strings, case sensitive, byte for byte */
+    check(h.get("Alice", 0) == HMAP_NOT_FOUND, "keys are case sensitive");
+    check(h.get("alic", 0) == HMAP_NOT_FOUND, "a prefix is not a key");
+    check(h.get("alice ", 0) == HMAP_NOT_FOUND, "trailing space is part of the key");
+
+    /* the empty string is a legal key (only NULL is HMAP_INVALID, see
+     * docs/implementation.md Q1) */
+    h.put("", 5);
+    v = 0;
+    check(h.get("", &v) == HMAP_OK && v == 5, "the empty string is a legal key");
+    check(h.len() == 4, "the empty key is counted once");
+    check(h.del("") == HMAP_OK, "del accepts the empty key");
+
+    /* ---------------- overwrite ---------------- */
+
+    same = h.put("alice", 31);
+    check(same == h, "an overwrite also returns the receiver");
+    check(h.len() == 3, "an overwrite does not grow the table");
+    v = 0;
+    check(h.get("alice", &v) == HMAP_OK && v == 31, "an overwrite stores the new value");
+
+    h.put("alice", 0);
+    v = -1;
+    check(h.get("alice", &v) == HMAP_OK && v == 0, "a zero value is a real value");
+
+    h.put("alice", -7);
+    v = 0;
+    check(h.get("alice", &v) == HMAP_OK && v == -7, "a negative value round-trips");
+
+    /* ---------------- delete ---------------- */
+
+    st = h.del("bob");
+    check(st == HMAP_OK, "del on an existing key returns HMAP_OK");
+    check(h.len() == 2, "del lowers len");
+    check(h.get("bob", 0) == HMAP_NOT_FOUND, "a deleted key is gone");
+    check(h.del("bob") == HMAP_NOT_FOUND, "a second del returns HMAP_NOT_FOUND");
+    check(h.len() == 2, "a failed del leaves len alone");
+
+    /* ---------------- guards ---------------- */
+
+    check(h.get(0, &v) == HMAP_INVALID, "get with a null key returns HMAP_INVALID");
+    check(h.del(0) == HMAP_INVALID, "del with a null key returns HMAP_INVALID");
+    same = h.put(0, 1);
+    check(same == h, "put with a null key returns the receiver");
+    check(h.len() == 2, "put with a null key does not write");
+
+    z = 0;
+    check(z.len() == 0, "len on a null handle is 0");
+    check(z.get("a", &v) == HMAP_INVALID, "get on a null handle returns HMAP_INVALID");
+    check(z.del("a") == HMAP_INVALID, "del on a null handle returns HMAP_INVALID");
+    check(z.iter() == 0, "iter on a null handle returns 0");
+    check(z.put("a", 1) == 0, "put on a null handle returns the receiver (0)");
+    check(z.clear() == 0, "clear on a null handle returns the receiver (0)");
+    z.release();
+    passed = passed + 1; /* release(0) is a no-op, reaching here is the assertion */
+
+    /* ---------------- clear ---------------- */
+
+    same = h.clear();
+    check(same == h, "clear returns the receiver");
+    check(h.len() == 0, "clear empties the table");
+    check(h.get("alice", 0) == HMAP_NOT_FOUND, "an old key is gone after clear");
+    check(h.get("carol", 0) == HMAP_NOT_FOUND, "every old key is gone after clear");
+
+    same = h.put("dave", 1).put("erin", 2);
+    check(same == h && h.len() == 2, "the table is reusable after clear");
+    check(h.get("dave", 0) == HMAP_OK, "a post-clear key is readable");
+
+    h.release();
+    passed = passed + 1; /* release() returned normally */
+
+    /* ---------------- capacity hint and seeded constructors ---------------- */
+
+    h = hashmap::Lib.newStrInt(4096);
+    h.put("x", 1);
+    check(h.len() == 1, "newStrInt with a capacity hint still works");
+    h.release();
+
+    h = hashmap::Lib.newStrIntSeeded(0, 12345, 67890);
+    h.put("alpha", 1).put("beta", 2);
+    v = 0;
+    check(h.get("alpha", &v) == HMAP_OK && v == 1, "seeded table finds alpha");
+    check(h.get("beta", &v) == HMAP_OK && v == 2, "seeded table finds beta");
+    check(h.get("gamma", 0) == HMAP_NOT_FOUND, "seeded table misses gamma");
+    h.release();
+
+    /* the same keys resolve identically under two different seeds */
+    {
+        HashStrInt *a = hashmap::Lib.newStrIntSeeded(0, 1, 2);
+        HashStrInt *b = hashmap::Lib.newStrIntSeeded(0, 0x5DEECE66D, 0xB);
+        a.put("one", 1).put("two", 2).put("three", 3);
+        b.put("one", 1).put("two", 2).put("three", 3);
+        v = 0;
+        check(a.get("three", &v) == HMAP_OK && v == 3, "seed A finds three");
+        check(b.get("three", &v) == HMAP_OK && v == 3, "seed B finds three");
+        check(a.len() == b.len() && a.len() == 3, "both seeds hold the same count");
+        a.release();
+        b.release();
+    }
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

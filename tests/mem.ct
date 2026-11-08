@@ -1,0 +1,189 @@
+/*
+ * mem.ct - the workload behind tests/mem.sh.
+ *
+ * Every mode has a constant memory footprint on purpose: the same key is
+ * overwritten N times, or inserted and deleted N times, or a fixed batch is
+ * inserted then cleared, or a fixed table is walked N times. If the footprint
+ * grows with N, something on the write path is not releasing what it should.
+ *
+ * The `iter` mode covers the strint iterator wrapper; `ipiter` is the same
+ * walk over HashIntPtr. Both shapes need a mode, otherwise an empty
+ * `intptr_iter_release` would leave the memory gate green.
+ *
+ * That is why the gate compares N=1000 against N=10000 instead of using an
+ * absolute ceiling: a per-iteration leak shows up as a difference, while a
+ * fixed-size table does not.
+ *
+ * The key is ~241 bytes, so a leaked copy per iteration is ~2.1 MB over 9000
+ * extra iterations - well above any allocator noise.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define KEYLEN 240
+
+char key[KEYLEN + 12];
+
+void fill_key(int suffix)
+{
+    int i;
+    int n;
+
+    for (i = 0; i < KEYLEN + 10; i = i + 1) {
+        key[i] = 'a';
+    }
+    i = KEYLEN + 10;
+    key[i] = 0;
+    i = i - 1;
+    n = suffix;
+    if (n == 0) {
+        key[i] = '0';
+        i = i - 1;
+    }
+    while (n > 0) {
+        key[i] = '0' + n % 10;
+        n = n / 10;
+        i = i - 1;
+    }
+}
+
+int main(void)
+{
+    char *mode;
+    char *ns;
+    int n;
+    int i;
+    int j;
+    int c;
+    int r;
+    int cycles;
+    HashStrInt *h;
+    HashStrIntIter *it;
+    HashIntPtr *p;
+    HashIntPtrIter *pit;
+
+    mode = getenv("HMAP_MEM_MODE");
+    ns = getenv("HMAP_MEM_N");
+    if (!mode) {
+        printf("missing HMAP_MEM_MODE\n");
+        return 2;
+    }
+    n = ns ? atoi(ns) : 1000;
+    if (n < 1) {
+        n = 1;
+    }
+
+    /* Overwrite one key N times: only `spare` churns, the table stays size 1. */
+    if (strcmp(mode, "churn") == 0) {
+        fill_key(0);
+        h = hashmap::Lib.newStrInt(0);
+        for (i = 0; i < n; i = i + 1) {
+            h.put(key, i);
+        }
+        if (h.len() != 1) {
+            printf("BAD len %d\n", h.len());
+            h.release();
+            return 3;
+        }
+        h.release();
+        printf("ok\n");
+        return 0;
+    }
+
+    /* Insert then delete one key N times: only the delete path churns. */
+    if (strcmp(mode, "del") == 0) {
+        fill_key(0);
+        h = hashmap::Lib.newStrInt(0);
+        for (i = 0; i < n; i = i + 1) {
+            h.put(key, i);
+            if (h.del(key) != HMAP_OK) {
+                printf("BAD del at %d\n", i);
+                h.release();
+                return 3;
+            }
+        }
+        if (h.len() != 0) {
+            printf("BAD len %d\n", h.len());
+            h.release();
+            return 3;
+        }
+        h.release();
+        printf("ok\n");
+        return 0;
+    }
+
+    /* Insert a batch, clear it, repeat: only elfree() churns. */
+    if (strcmp(mode, "clear") == 0) {
+        h = hashmap::Lib.newStrInt(0);
+        cycles = n / 100;
+        for (c = 0; c < cycles; c = c + 1) {
+            for (j = 0; j < 100; j = j + 1) {
+                fill_key(c * 100 + j);
+                h.put(key, j);
+            }
+            if (h.len() != 100) {
+                printf("BAD len %d\n", h.len());
+                h.release();
+                return 3;
+            }
+            h.clear();
+        }
+        if (h.len() != 0) {
+            printf("BAD len %d\n", h.len());
+            h.release();
+            return 3;
+        }
+        h.release();
+        printf("ok\n");
+        return 0;
+    }
+
+    /* Walk a fixed table repeatedly: only the iterator wrapper churns. */
+    if (strcmp(mode, "iter") == 0) {
+        h = hashmap::Lib.newStrInt(0);
+        for (j = 0; j < 100; j = j + 1) {
+            fill_key(j);
+            h.put(key, j);
+        }
+        for (i = 0; i < n; i = i + 1) {
+            for (r = 0; r < 10; r = r + 1) {
+                it = h.iter();
+                while (it.next()) {
+                }
+                it.release();
+            }
+        }
+        h.release();
+        printf("ok\n");
+        return 0;
+    }
+
+    /* The same fixed-table walk over HashIntPtr: only the intptr iterator
+     * wrapper churns. */
+    if (strcmp(mode, "ipiter") == 0) {
+        p = hashmap::Lib.newIntPtr(0);
+        for (j = 0; j < 100; j = j + 1) {
+            p.put(j, 0);
+        }
+        for (i = 0; i < n; i = i + 1) {
+            for (r = 0; r < 10; r = r + 1) {
+                pit = p.iter();
+                while (pit.next()) {
+                }
+                pit.release();
+            }
+        }
+        p.release();
+        printf("ok\n");
+        return 0;
+    }
+
+    printf("unknown mode %s\n", mode);
+    return 2;
+}

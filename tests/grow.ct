@@ -1,0 +1,113 @@
+/*
+ * grow.ct - the table must survive a grow it was never sized for.
+ *
+ * A fresh table starts at upstream's default of 16 buckets; 100k distinct keys
+ * force many resize0() calls. Every key must still be reachable afterwards,
+ * which is what catches a resize that drops or misplaces entries.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    HashIntPtr *p;
+    char key[32];
+    int *vals;
+    int v;
+    int i;
+    int missing;
+    int wrong;
+    int wrong_ptr;
+    int probe;
+    void *out;
+
+    /* ---------------- 100k string keys ---------------- */
+
+    h = hashmap::Lib.newStrInt(0);
+    for (i = 0; i < 100000; i = i + 1) {
+        snprintf(key, 32, "key-%d", i);
+        h.put(key, i);
+    }
+    check(h.len() == 100000, "len reports 100000 after the growth");
+
+    missing = 0;
+    wrong = 0;
+    for (i = 0; i < 100000; i = i + 1) {
+        snprintf(key, 32, "key-%d", i);
+        v = -1;
+        if (h.get(key, &v) != HMAP_OK) {
+            missing = missing + 1;
+        } else if (v != i) {
+            wrong = wrong + 1;
+        }
+    }
+    check(missing == 0, "no key is lost across the growth");
+    check(wrong == 0, "no value is misplaced across the growth");
+
+    /* delete every other key, then re-check both halves */
+    for (i = 0; i < 100000; i = i + 2) {
+        snprintf(key, 32, "key-%d", i);
+        h.del(key);
+    }
+    check(h.len() == 50000, "deleting 50k keys leaves len at 50000");
+
+    missing = 0;
+    wrong = 0;
+    for (i = 0; i < 100000; i = i + 1) {
+        snprintf(key, 32, "key-%d", i);
+        probe = h.get(key, 0);
+        if (i % 2 == 0) {
+            if (probe != HMAP_NOT_FOUND) {
+                wrong = wrong + 1;
+            }
+        } else if (probe != HMAP_OK) {
+            missing = missing + 1;
+        }
+    }
+    check(wrong == 0, "every deleted key is a miss");
+    check(missing == 0, "every surviving key is still a hit");
+    h.release();
+
+    /* ---------------- 50k int keys, borrowed values ---------------- */
+
+    p = hashmap::Lib.newIntPtr(0);
+    vals = malloc(50000 * sizeof(int));
+    for (i = 0; i < 50000; i = i + 1) {
+        vals[i] = i;
+        p.put(i, &vals[i]);
+    }
+    check(p.len() == 50000, "the intptr table grows to 50000");
+    wrong_ptr = 0;
+    for (i = 0; i < 50000; i = i + 1) {
+        out = 0;
+        if (p.get(i, &out) != HMAP_OK || out != &vals[i]) {
+            wrong_ptr = wrong_ptr + 1;
+        }
+    }
+    check(wrong_ptr == 0, "every int key returns its own pointer");
+    p.release();
+    free(vals);
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

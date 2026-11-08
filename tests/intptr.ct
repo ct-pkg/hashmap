@@ -1,0 +1,153 @@
+/*
+ * intptr.ct - HashIntPtr: int keys, borrowed void * values.
+ *
+ * The package copies the pointer, never the pointee: nothing here is freed by
+ * the table, and a NULL value is a real value (get still returns HMAP_OK).
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+int main(void)
+{
+    HashIntPtr *h;
+    HashIntPtr *same;
+    HashIntPtr *z;
+    HashIntPtrIter *it;
+    int a;
+    int b;
+    int c;
+    void *out;
+    int st;
+    int seen;
+
+    a = 111;
+    b = 222;
+    c = 333;
+
+    h = hashmap::Lib.newIntPtr(0);
+    check(h != 0, "newIntPtr(0) returns a handle");
+    check(h.len() == 0, "a fresh intptr table has len 0");
+
+    same = h.setLoadFactor(0.8);
+    check(same == h, "setLoadFactor returns the receiver");
+    same = h.put(7, &a);
+    check(same == h, "put returns the receiver");
+    h.put(9, &b).put(-5, 0);
+
+    check(h.len() == 3, "three int keys give len 3");
+
+    out = 0;
+    st = h.get(7, &out);
+    check(st == HMAP_OK, "get on an existing int key returns HMAP_OK");
+    check(out == &a, "get returns the very pointer that was stored");
+
+    out = 0;
+    check(h.get(9, &out) == HMAP_OK && out == &b, "get 9");
+
+    out = &c;
+    st = h.get(-5, &out);
+    check(st == HMAP_OK, "a NULL value is still a hit");
+    check(out == 0, "a NULL value comes back as NULL, not as a miss");
+
+    st = h.get(8, &out);
+    check(st == HMAP_NOT_FOUND, "get on a missing int key returns HMAP_NOT_FOUND");
+    check(out == 0, "out is untouched on a miss");
+
+    check(h.get(7, 0) == HMAP_OK, "get with a null out only tests existence");
+    check(h.get(8, 0) == HMAP_NOT_FOUND, "null out on a missing key");
+
+    /* ---------------- overwrite ---------------- */
+
+    same = h.put(7, &b);
+    check(same == h, "an overwrite returns the receiver");
+    check(h.len() == 3, "an overwrite does not grow the table");
+    out = 0;
+    check(h.get(7, &out) == HMAP_OK && out == &b, "the overwrite wins");
+
+    h.put(7, 0);
+    out = &a;
+    check(h.get(7, &out) == HMAP_OK && out == 0, "overwrite with NULL is a real value");
+
+    /* ---------------- delete ---------------- */
+
+    check(h.del(9) == HMAP_OK, "del on an existing key returns HMAP_OK");
+    check(h.len() == 2, "del lowers len");
+    check(h.get(9, 0) == HMAP_NOT_FOUND, "a deleted int key is gone");
+    check(h.del(9) == HMAP_NOT_FOUND, "a second del returns HMAP_NOT_FOUND");
+
+    /* ---------------- clear ---------------- */
+
+    same = h.clear();
+    check(same == h, "clear returns the receiver");
+    check(h.len() == 0, "clear empties the table");
+    check(h.get(7, 0) == HMAP_NOT_FOUND, "an old int key is gone after clear");
+    h.put(1, &c);
+    check(h.get(1, 0) == HMAP_OK, "the table is reusable after clear");
+
+    /* ---------------- null handle guards ---------------- */
+
+    z = 0;
+    check(z.len() == 0, "len on a null handle is 0");
+    check(z.get(1, &out) == HMAP_INVALID, "get on a null handle returns HMAP_INVALID");
+    check(z.del(1) == HMAP_INVALID, "del on a null handle returns HMAP_INVALID");
+    check(z.iter() == 0, "iter on a null handle returns 0");
+    check(z.put(1, 0) == 0, "put on a null handle returns the receiver (0)");
+    check(z.clear() == 0, "clear on a null handle returns the receiver (0)");
+    z.release();
+    passed = passed + 1;
+
+    /* ---------------- iteration ---------------- */
+
+    it = h.iter();
+    check(it != 0, "iter returns a cursor");
+    seen = 0;
+    while (it.next()) {
+        seen = seen + 1;
+        check(it.key() == 1, "iter key is the stored int");
+        check(it.value() == &c, "iter value is the stored pointer");
+    }
+    check(seen == 1, "iteration visits every entry once");
+    check(it.next() == 0, "next stays 0 after the end");
+    check(it.key() == 0, "key after the end is 0");
+    check(it.value() == 0, "value after the end is 0");
+    it.release();
+
+    h.release();
+
+    /* ---------------- capacity hint and seeded constructors ---------------- */
+
+    h = hashmap::Lib.newIntPtr(2048);
+    h.put(-1, &a);
+    out = 0;
+    check(h.get(-1, &out) == HMAP_OK && out == &a, "negative key with a capacity hint");
+    h.release();
+
+    h = hashmap::Lib.newIntPtrSeeded(0, 7, 11);
+    h.put(0, &a).put(2147483647, &b);
+    out = 0;
+    check(h.get(0, &out) == HMAP_OK && out == &a, "seeded table finds 0");
+    check(h.get(2147483647, &out) == HMAP_OK && out == &b, "seeded table finds INT_MAX");
+    check(h.get(-2147483647 - 1, 0) == HMAP_NOT_FOUND, "seeded table misses INT_MIN");
+    h.release();
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

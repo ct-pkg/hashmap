@@ -1,0 +1,30 @@
+/*
+ * compile_fail/key_write.ct - built by tests/run.sh, must NOT compile.
+ *
+ * `StrIntIter.key()` returns `const char *`: the bytes belong to the table and
+ * are what it hashes and compares on. A mutable borrow would let a caller do
+ * `it.key()[0] = 'X'` and silently corrupt the table (lookup, iteration and
+ * delete all stop finding the entry, while len() stays the same).
+ *
+ * tests/run.sh asserts the exact diagnostic, so this stays measured rather
+ * than remembered. Do not "fix" this file.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+int main(void)
+{
+    HashStrInt *h = hashmap::Lib.newStrInt(0);
+    HashStrIntIter *it;
+
+    h.put("a", 1);
+    it = h.iter();
+    if (it.next()) {
+        it.key()[0] = 'X';
+    }
+    it.release();
+    h.release();
+    return 0;
+}

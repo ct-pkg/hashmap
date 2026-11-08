@@ -1,0 +1,100 @@
+/*
+ * loadfactor.ct - setLoadFactor reaches upstream, and clear() keeps buckets.
+ *
+ * Both effects are read through hashmap_test_nbuckets(), a static-inline seam
+ * in HashMap.shim.h that wraps upstream's hashmap_nbuckets(). It is not a CT
+ * method: the public surface stays the 8 methods per shape.
+ *
+ * With upstream's default 16 buckets (hashmap.c:115-123, :154-157):
+ *
+ *   factor 0.50  growat = 8   -> the 9th insert resizes to 32 buckets
+ *   factor 0.95  growat = 15  -> 9 inserts keep 16 buckets
+ *   NaN ignored (default 0.60, growat = 9) -> 9 inserts keep 16, the 10th grows
+ *
+ * clear() must keep the grown bucket array (update_cap = true). Upstream's
+ * update_cap = false path reallocates back to `cap` (hashmap.c:207-224), which
+ * is what this file exists to reject.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include "HashMap.shim.h"
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+void fill(HashStrInt *h, int from, int to)
+{
+    char key[32];
+    int i;
+
+    for (i = from; i < to; i = i + 1) {
+        snprintf(key, 32, "k%d", i);
+        h.put(key, i);
+    }
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    double zero;
+
+    zero = 0.0;
+
+    /* 0.10 is clamped up to 0.50: the 9th insert must resize. */
+    h = hashmap::Lib.newStrInt(0).setLoadFactor(0.10);
+    check(hashmap_test_nbuckets(h) == 16, "a fresh table has 16 buckets");
+    fill(h, 0, 9);
+    check(h.len() == 9, "nine keys inserted");
+    check(hashmap_test_nbuckets(h) == 32, "0.10 is clamped to 0.50 (grow at 9)");
+    h.release();
+
+    /* 0.99 is clamped down to 0.95: 9 inserts stay at 16 buckets. */
+    h = hashmap::Lib.newStrInt(0).setLoadFactor(0.99);
+    fill(h, 0, 9);
+    check(hashmap_test_nbuckets(h) == 16, "0.99 is clamped to 0.95 (no grow at 9)");
+    fill(h, 9, 16);
+    check(hashmap_test_nbuckets(h) == 32, "0.95 grows at 16 inserts");
+    h.release();
+
+    /* NaN is ignored: the default 0.60 applies (growat 9). */
+    h = hashmap::Lib.newStrInt(0);
+    h.setLoadFactor(zero / zero);
+    fill(h, 0, 9);
+    check(hashmap_test_nbuckets(h) == 16, "NaN keeps the default factor for 9 inserts");
+    fill(h, 9, 10);
+    check(hashmap_test_nbuckets(h) == 32, "NaN keeps 0.60 (grow at 10)");
+    h.release();
+
+    /* NaN after an explicit factor keeps that factor, not the default. */
+    h = hashmap::Lib.newStrInt(0).setLoadFactor(0.50);
+    h.setLoadFactor(zero / zero);
+    fill(h, 0, 9);
+    check(hashmap_test_nbuckets(h) == 32, "NaN after 0.50 keeps 0.50");
+    h.release();
+
+    /* clear() keeps the grown bucket array. */
+    h = hashmap::Lib.newStrInt(0);
+    fill(h, 0, 40);
+    check(hashmap_test_nbuckets(h) >= 32, "40 keys grew the table");
+    h.clear();
+    check(h.len() == 0, "clear empties the table");
+    check(hashmap_test_nbuckets(h) >= 32, "clear keeps the grown bucket array");
+    h.release();
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

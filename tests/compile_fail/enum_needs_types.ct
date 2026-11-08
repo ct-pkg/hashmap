@@ -1,0 +1,15 @@
+/*
+ * compile_fail/enum_needs_types.ct - built by tests/run.sh, must NOT compile.
+ *
+ * `hashmap::HashMap` exposes the traits only; the status constants live in
+ * `hashmap::HashMapTypes`, so importing just the trait module cannot see
+ * HMAP_OK. This keeps the status codes opt-in instead of ambient.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMap;
+
+int main(void)
+{
+    return HMAP_OK;
+}

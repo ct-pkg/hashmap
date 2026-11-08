@@ -1,0 +1,13 @@
+# Vendored upstream: tidwall/hashmap.c
+# Pinned commit: 3735986914fc1c4e6a9123b406d0970666aa4aec
+# Files fetched verbatim from raw.githubusercontent.com at that commit on
+# 2026-11-08. Verify with:
+#
+#   cd hashmap && shasum -a 256 -c tools/third_party.sha256
+#
+# The directory must never be named vendor/: `ct get`'s copy_tree and
+# sha_collect skip that name (Pkg.h.ct:553, :300), so the dependency would be
+# missing after install while ct.pkg still pointed at it.
+0d890e2ab893aed3d5ee5f5b3b0defaa71ee5ed7e27c05439833262d1cce9bf1  third_party/hashmap.c
+0ec1a49690007de9e144f6daa7f13a344128ba51b1020a597ad3a79c8a43e792  third_party/hashmap.h
+f61e7bc66f7caf8c9690fb59a10b4fa55e28ac1ea075273c4560e0558d3d4fda  third_party/LICENSE

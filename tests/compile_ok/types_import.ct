@@ -1,0 +1,19 @@
+/*
+ * compile_ok/types_import.ct - built by tests/run.sh, MUST compile.
+ *
+ * The positive control for compile_fail/enum_needs_types.ct: importing
+ * `hashmap::HashMapTypes` together with `hashmap::HashMap` makes all three
+ * status codes visible. Without this, a compiler that simply rejected
+ * `HMAP_OK` everywhere (or a change that renamed it) would keep the negative
+ * test green for the wrong reason.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+int main(void)
+{
+    int sum = HMAP_OK + HMAP_NOT_FOUND + HMAP_INVALID;
+    return sum == 3 ? 0 : 1;
+}

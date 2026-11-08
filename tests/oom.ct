@@ -1,0 +1,132 @@
+/*
+ * oom.ct - the OOM contract, observed from the outside.
+ *
+ * tests/oom.sh runs this binary in seven modes (HMAP_FAULT_MODE), covering all
+ * five abort sites in the shim:
+ *
+ *   new         install(1)       upstream hashmap_new() cannot allocate
+ *   new-shim    install_shim(1)  the wrapper struct malloc cannot allocate
+ *   put         install(4)       the first resize0() cannot allocate
+ *   put-copy    install_shim(2)  the string-key copy cannot allocate
+ *   put-intptr  install(4)       HashIntPtr's resize failure
+ *   iter        install_shim(2)  the iterator wrapper cannot allocate
+ *   ok          no injection; the same workload must finish normally, so a
+ *               green check cannot be explained by "the program always aborts"
+ *
+ * A mode that reaches its "UNREACHABLE" line returns a non-zero status instead
+ * of aborting; oom.sh treats that as a failure, so removing any abort branch
+ * (or turning it into a segfault) turns the gate red.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "oom_fixture.h"
+
+int main(void)
+{
+    HashStrInt *h;
+    HashIntPtr *p;
+    char key[32];
+    char *mode;
+    int i;
+    int v;
+
+    mode = getenv("HMAP_FAULT_MODE");
+    if (!mode) {
+        mode = "ok";
+    }
+
+    if (strcmp(mode, "new") == 0) {
+        ct_test_oom_install(1);
+        h = hashmap::Lib.newStrInt(0);
+        h.release();
+        printf("UNREACHABLE new\n");
+        return 3;
+    }
+
+    if (strcmp(mode, "new-shim") == 0) {
+        ct_test_oom_install_shim(1);
+        h = hashmap::Lib.newStrInt(0);
+        h.release();
+        printf("UNREACHABLE new-shim\n");
+        return 3;
+    }
+
+    if (strcmp(mode, "put") == 0) {
+        ct_test_oom_install(4);
+        h = hashmap::Lib.newStrInt(0);
+        for (i = 0; i < 1000; i = i + 1) {
+            snprintf(key, 32, "k%d", i);
+            h.put(key, i);
+        }
+        h.release();
+        printf("UNREACHABLE put\n");
+        return 3;
+    }
+
+    if (strcmp(mode, "put-copy") == 0) {
+        /* raw #1 is the wrapper; the key copy is raw #2 and must abort before
+         * upstream ever sees the item. */
+        ct_test_oom_install_shim(2);
+        h = hashmap::Lib.newStrInt(0);
+        h.put("first", 1);
+        h.release();
+        printf("UNREACHABLE put-copy\n");
+        return 3;
+    }
+
+    if (strcmp(mode, "put-intptr") == 0) {
+        ct_test_oom_install(4);
+        p = hashmap::Lib.newIntPtr(0);
+        for (i = 0; i < 1000; i = i + 1) {
+            p.put(i, 0);
+        }
+        p.release();
+        printf("UNREACHABLE put-intptr\n");
+        return 3;
+    }
+
+    if (strcmp(mode, "iter") == 0) {
+        /* raw #1 is the wrapper, raw #2 is the iterator. */
+        ct_test_oom_install_shim(2);
+        h = hashmap::Lib.newStrInt(0);
+        h.iter();
+        h.release();
+        printf("UNREACHABLE iter\n");
+        return 3;
+    }
+
+    /* Negative control: both workloads with working allocators. */
+    h = hashmap::Lib.newStrInt(0);
+    for (i = 0; i < 1000; i = i + 1) {
+        snprintf(key, 32, "k%d", i);
+        h.put(key, i);
+    }
+    v = -1;
+    if (h.len() != 1000 || h.get("k999", &v) != HMAP_OK || v != 999) {
+        printf("BAD control\n");
+        h.release();
+        return 4;
+    }
+    h.release();
+
+    p = hashmap::Lib.newIntPtr(0);
+    for (i = 0; i < 1000; i = i + 1) {
+        p.put(i, &v);
+    }
+    if (p.len() != 1000) {
+        printf("BAD intptr control\n");
+        p.release();
+        return 4;
+    }
+    p.release();
+
+    printf("ok\n");
+    return 0;
+}

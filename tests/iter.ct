@@ -1,0 +1,136 @@
+/*
+ * iter.ct - the read-only iterator.
+ *
+ * Order is not promised, so every assertion is order independent: each key is
+ * visited exactly once, the values match, a second traversal sees the same
+ * count, and the recorded "collect, then delete" recipe (the only supported
+ * way to delete while traversing) runs end to end.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <string.h>
+
+#define N 137
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    HashStrIntIter *it;
+    char key[32];
+    char expected[32];
+    char collected[N + 8][32];
+    int seen[N];
+    int visited;
+    int count;
+    int i;
+    int j;
+    int ok;
+    long long sum;
+
+    h = hashmap::Lib.newStrInt(0);
+
+    /* ---------------- an empty table ---------------- */
+
+    it = h.iter();
+    check(it != 0, "iter on an empty table returns a cursor");
+    check(it.next() == 0, "an empty table ends immediately");
+    check(it.key() == 0, "key after the end is 0");
+    check(it.value() == 0, "value after the end is 0");
+    it.release();
+
+    /* ---------------- every key exactly once ---------------- */
+
+    for (i = 0; i < N; i = i + 1) {
+        snprintf(key, 32, "k%d", i);
+        h.put(key, i * 3);
+        seen[i] = 0;
+    }
+    check(h.len() == N, "137 distinct keys are stored");
+
+    visited = 0;
+    sum = 0;
+    it = h.iter();
+    while (it.next()) {
+        visited = visited + 1;
+        sum = sum + it.value();
+        ok = 0;
+        for (j = 0; j < N; j = j + 1) {
+            snprintf(expected, 32, "k%d", j);
+            if (it.key() != 0 && strcmp(it.key(), expected) == 0) {
+                ok = 1;
+                if (seen[j] != 0) {
+                    ok = -1; /* visited twice */
+                } else {
+                    seen[j] = 1;
+                    if (it.value() != j * 3) {
+                        ok = -2;
+                    }
+                }
+            }
+        }
+        check(ok == 1, "each visited entry is a known key with the right value");
+    }
+    check(visited == N, "the traversal visits exactly 137 entries");
+    check(sum == (long long)(N - 1) * N / 2 * 3, "the visited values sum to the expected total");
+    check(it.next() == 0, "next stays 0 once the traversal ended");
+    it.release();
+
+    ok = 1;
+    for (i = 0; i < N; i = i + 1) {
+        if (seen[i] != 1) {
+            ok = 0;
+        }
+    }
+    check(ok == 1, "every key was visited exactly once");
+
+    /* ---------------- a second traversal ---------------- */
+
+    count = 0;
+    it = h.iter();
+    while (it.next()) {
+        count = count + 1;
+    }
+    it.release();
+    check(count == N, "a second traversal sees the same count");
+
+    /* ---------------- collect, then delete ---------------- */
+
+    count = 0;
+    it = h.iter();
+    while (it.next()) {
+        if (count < N + 8) {
+            strcpy(collected[count], it.key());
+            count = count + 1;
+        }
+    }
+    it.release();
+    check(count == N, "the collect pass recorded every key");
+
+    for (i = 0; i < count; i = i + 1) {
+        check(h.del(collected[i]) == HMAP_OK, "the collected key deletes cleanly");
+    }
+    check(h.len() == 0, "collect-then-delete empties the table");
+    check(h.get(collected[0], 0) == HMAP_NOT_FOUND, "a collected key is gone");
+
+    h.release();
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

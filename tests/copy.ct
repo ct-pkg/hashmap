@@ -1,0 +1,123 @@
+/*
+ * copy.ct - what "the item is copied" actually means for a `char *` key.
+ *
+ * Upstream copies only `elsize` bytes (hashmap.c:124, :286), so the package
+ * strdup's the key itself. These assertions pin that down from the caller's
+ * side: the buffer may be freed or overwritten right after put(), and the
+ * table still resolves the original bytes. The 100k overwrite / delete churn
+ * also exercises the manual key release on both paths; the memory gate
+ * (tests/mem.sh) is what turns a missing release red.
+ *
+ * License: MIT (see LICENSE).
+ */
+import hashmap::HashMapTypes;
+import hashmap::HashMap;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int passed = 0;
+int failed = 0;
+
+void check(int cond, const char *name)
+{
+    if (cond) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        printf("FAIL %s\n", name);
+    }
+}
+
+/* 200 'k's, NUL-terminated: long enough that a leaked copy per iteration shows
+ * up in the memory gate. */
+void fill_long(char *buf)
+{
+    int i;
+    for (i = 0; i < 200; i = i + 1) {
+        buf[i] = 'k';
+    }
+    buf[200] = 0;
+}
+
+int main(void)
+{
+    HashStrInt *h;
+    char *buf;
+    char *other;
+    int v;
+    int i;
+    int bad;
+
+    /* ---------------- the caller may free right after put ---------------- */
+
+    buf = malloc(64);
+    strcpy(buf, "temporary-key");
+    h = hashmap::Lib.newStrInt(0);
+    h.put(buf, 7);
+    free(buf);
+
+    v = 0;
+    check(h.get("temporary-key", &v) == HMAP_OK,
+          "get after freeing the caller's key buffer still hits");
+    check(v == 7, "the value survives the caller's free");
+    check(h.len() == 1, "the copied key is counted once");
+    h.release();
+
+    /* ---------------- the table keeps its own bytes ---------------- */
+
+    buf = malloc(32);
+    strcpy(buf, "alpha");
+    h = hashmap::Lib.newStrInt(0);
+    h.put(buf, 1);
+    strcpy(buf, "omega");
+    check(h.get("alpha", &v) == HMAP_OK, "overwriting the caller buffer keeps the stored key");
+    check(h.get("omega", 0) == HMAP_NOT_FOUND, "the new buffer content is not a key");
+    free(buf);
+    h.release();
+
+    /* ---------------- content identity, not pointer identity ---------------- */
+
+    buf = malloc(300);
+    other = malloc(300);
+    fill_long(buf);
+    strcpy(other, buf);
+    check(buf != other, "two distinct buffers (pointer identity differs)");
+    h = hashmap::Lib.newStrInt(0);
+    h.put(buf, 42);
+    v = 0;
+    check(h.get(other, &v) == HMAP_OK, "a different buffer with the same bytes hits");
+    check(v == 42, "the long key resolves to its value");
+    free(other);
+    free(buf);
+
+    /* ---------------- 100k overwrites of one key ---------------- */
+
+    buf = malloc(300);
+    fill_long(buf);
+    h.clear();
+    for (i = 0; i < 100000; i = i + 1) {
+        h.put(buf, i);
+    }
+    check(h.len() == 1, "100k overwrites keep len at 1");
+    v = 0;
+    check(h.get(buf, &v) == HMAP_OK && v == 99999, "the last overwrite wins");
+
+    /* ---------------- 100k insert + delete pairs ---------------- */
+
+    bad = 0;
+    for (i = 0; i < 100000; i = i + 1) {
+        h.put(buf, i);
+        if (h.del(buf) != HMAP_OK) {
+            bad = bad + 1;
+        }
+    }
+    check(bad == 0, "100k insert/delete pairs all report HMAP_OK");
+    check(h.len() == 0, "the insert/delete churn ends empty");
+    free(buf);
+    h.release();
+
+    printf("SUMMARY passed=%d failed=%d\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}

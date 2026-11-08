@@ -10,15 +10,16 @@
 # the shim (strdup + elfree), a pointer value is copied as a pointer only; the
 # pointee stays with the caller.
 #
-# `third_party/` (not `vendor/`) will hold the upstream hashmap.c / hashmap.h at
-# S1: `ct get` skips a directory named `vendor`, so a package shipping its own
-# would install without it. `cflags` / `ldflags` are written from the consumer
-# root, where this package lands as `vendor/hashmap/`. They start working only
-# once `third_party/` exists (S1); until then this package is not installable.
+# `third_party/` (not `vendor/`) holds the upstream hashmap.c / hashmap.h,
+# pinned at commit 3735986914fc1c4e6a9123b406d0970666aa4aec with checksums in
+# tools/third_party.sha256. The name matters: `ct get` skips a directory named
+# `vendor`, so a package shipping its own would install without it. `cflags` /
+# `ldflags` are written from the consumer root, where this package lands as
+# `vendor/hashmap/`, and are exercised by the install section of tools/check.sh.
 #
-# Unreleased: `version = 0.1.0` is the declared first version, not a tag. No
-# `v0.1.0` exists on the remote yet, so `tools/repos.txt` records the tag as `-`
-# and the `index/packages.txt` line stays commented until the tag is pushed.
+# Released: `version = 0.1.0` is the first release; the lightweight tag
+# `v0.1.0` points at the release commit. Index metadata (`index/tools/repos.txt`
+# and the `index/packages.txt` line) is refreshed by the index owner separately.
 name = hashmap
 version = 0.1.0
 licence = MIT
