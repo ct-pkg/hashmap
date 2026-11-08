@@ -119,7 +119,8 @@ ct install
 | `HMAP_INVALID` | 2 | 空键 / 空句柄 |
 
 枚举值紧凑为 0 / 1 / 2，与 `dict` 的 `DICT_OK` / `DICT_NOT_FOUND` / `DICT_INVALID`
-一一对应；没有 OOM 项——内存不足直接终止进程，见 §5.5。
+一一对应；原先留给 OOM 的编号 2 已删除并由 `HMAP_INVALID` 接续，不保留空位。状态码里
+没有 OOM 项——内存不足直接终止进程，见 §5.5。
 
 ## 5. 教程正文
 
