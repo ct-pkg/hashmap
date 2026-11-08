@@ -180,7 +180,32 @@ ct install
 | 遍历拿到的指针读出错值 | 迭代期间发生了写操作 | v1 不支持迭代中写；先收集再改 |
 | 安装后编译报找不到 `hashmap.h` | 第三方目录被放进了 `vendor/` | 必须是 `third_party/`；`ct get` 会跳过 `vendor` |
 
-## 8. 限制与未支持
+## 8. 术语表（Glossary）
+
+| 术语 | 含义 | 本包中的所指 |
+| --- | --- | --- |
+| `borrow`（借用） / 所有权（ownership） | 借用是只保存或返回指针、不取得所有权、由调用方负责释放的引用方式；所有权指"谁负责在何时释放对象"。 | `HashIntPtr` 的 `void *` 值与 `key()` 返回的 `char *` 是借用；`clear()` / `release()` 不释放 pointee。`HashStrInt` 的键不是借用——它是包 `strdup` 出来的副本。 |
+| `handle`（句柄） | 指向包内部对象的不透明标识；调用方只能通过包的方法操作它，不能解引用或自行分配。 | `HashStrInt *`、`HashIntPtr *`、`HashStrIntIter *`、`HashIntPtrIter *` 四个句柄。 |
+| `host`（宿主） | CT 映射表里方法挂靠的类型；方法按（宿主, 方法名）寻址，同一宿主上不能有两个同名方法。 | 上述四个类型各自是宿主；`namespace hashmap`（trait `Lib`）只挂四个构造器。 |
+| `mapping`（映射） | 把 CT 方法转发到 C 实现的 shim 注册行，一个公开方法对应一行。 | S1 落地：每个形状 12 行（表 8 + 迭代器 4），四个构造器另计，估算见 `docs/design.md` §7。 |
+| 链式返回自身 | 配置 / 写入方法返回接收者本身，以便把多次调用连成一条表达式；返回值不携带成功 / 失败信息。 | `setLoadFactor` / `put` / `clear` 返回 `HashStrInt *` 或 `HashIntPtr *` 本身；`get` / `del` / `len` 返回状态码或计数。链没有错误通道，这正是 OOM 只能终止的原因（§5.5）。 |
+| `pub type` | CT 的公开类型别名声明；本包用它把 C 侧包装结构暴露成 CT 句柄，公开面不出现 C 类型。 | `HashMap.m.ct` 里的四个 `pub type`：`HashStrInt = struct ct_hashmap_strint`、`HashIntPtr = struct ct_hashmap_intptr`，以及对应的两个迭代器类型；`struct hashmap` 只出现在 shim。 |
+| `shim` | C 侧适配层：把 CT trait 方法桥接到上游 C API 的静态内联函数与注册代码。 | `hashmap/HashMap.m.ct` 的 trait 由 shim 实现（S1 落地）；`item` 结构、`elfree`、`hashmap_oom()` 检查都在这一层。 |
+| `HashStrInt` / `HashIntPtr`（两种形状） | 本包两个具体表类型，键值归属不同，各自独立成宿主。 | `HashStrInt *`：`char *` 键由包 `strdup` 深拷贝 → `int` 值按值拷贝；`HashIntPtr *`：`int` 键按值拷贝 → `void *` 值只拷贝指针、pointee 不归包所有。构造器为 `newStrInt` / `newStrIntSeeded` 与 `newIntPtr` / `newIntPtrSeeded`。 |
+| 条目拷贝 / 深拷贝 | 条目拷贝指按 `elsize` 复制条目结构本身；深拷贝指连键指向的内容一起复制。 | `put` 对 `char *` 键做深拷贝（`strdup`），调用方随后可以 `free` 自己的缓冲区；`HashIntPtr` 的 `int` 键与 `void *` 值只做条目拷贝，不碰 pointee。 |
+| `elsize` / `bucketsz` | 上游 `struct hashmap` 的两个尺寸字段：单个条目的字节数，以及每个桶的跨距（桶头加条目，向上对齐到指针宽度）。 | `hashmap.c:34` 声明 `elsize`，`:107-110` 由 `elsize` 算出 `bucketsz`；上游只按这两个尺寸 `memcpy`，所以"拷贝"不含键字符串内容。 |
+| `elfree` / `spare` | 上游的条目回收回调，以及 `hashmap_set` / `hashmap_delete` 把旧条目拷出来返回用的临时缓冲区。 | `elfree` 只在 `clear()` / `release()` 时逐条调用；覆盖与删除不调用它——旧条目被拷进 `map->spare` 后返回（`hashmap.c:276-278`、`:351`），shim 必须在返回后立刻 `free` 旧键副本，晚一步就被下一次调用覆盖而泄漏。 |
+| Robin Hood（开放寻址） | 开放寻址的一种冲突消解策略：探测距离短的条目让位给更长的，把探测长度摊平。 | 上游 `hashmap.c` 的实现基础（`struct bucket` 的 `dib` 字段、`hashmap.c:280-285` 的交换）；本包不暴露桶结构，调用方只看到自动扩容与一次性搬全表。 |
+| 一次性扩容 / `rehash` | 桶数变化后把条目重新分布到新桶数组的过程；一次性指扩容瞬间搬完整表。 | 本包是一次性：`put` 触发扩容时搬全表，超大表会出现可感知停顿；`dict` 是增量 rehash。 |
+| `load factor`（装载因子） | 条目数达到桶数的多少比例时触发扩容。 | `setLoadFactor(double)` 把它夹到 `[0.50, 0.95]`，NaN 忽略；默认 0.60（上游 `GROW_AT`）。 |
+| 粘性状态机（sticky status） | 把最近一次失败记在表上、由调用方事后查询并清除的错误模型。 | 本包**没有**：链式 `put` 没有错误通道，OOM 直接终止进程，所以公开面没有 `status()` / `clearStatus()`，也没有状态字段。 |
+| 只读迭代 | 遍历期间不允许修改表的迭代方式；删除会重排桶并使游标失效。 | `iter()` 返回 `HashStrIntIter *` / `HashIntPtrIter *`；`key()` / `value()` 是借用，任何 `put` / `del` / `clear` 之后都失效。遍历中要删除，先拷键，结束后再 `del`。 |
+| `HMAP_OK` / `HMAP_NOT_FOUND` / `HMAP_INVALID` | 本包三个状态码：成功、键不存在、参数非法。 | 值为 0 / 1 / 2，定义在 `HashMapTypes.h.ct`；`HMAP_INVALID` 由空键、空句柄触发，编号 2 不留给 OOM。 |
+| `OOM` | out of memory，内存分配失败。 | 本包直接进程终止：`put` 之后 `hashmap_oom()` 置位就向 stderr 打印 `hashmap: out of memory: put` 并 `abort()`，构造器失败打印 `hashmap: out of memory: new`；调用方不需要、也不能处理。与 `dict` 的共同契约（§5.5）。 |
+| `third_party/` / `vendor/` | 存放 vendored 上游源码的目录约定。 | 上游 `hashmap.c` / `hashmap.h` 放 `third_party/`；不能改名 `vendor/`，`ct get` 会跳过该目录。 |
+| `S0` / `S1` | 本包落地切片的编号。 | S0 = 需求与骨架（当前状态），S1 = 上游核对、实现、测试与安装态验收，见 `docs/design.md` §10。 |
+
+## 9. 限制与未支持
 
 - **没有自动析构**：包只提供 `release()`；调用方要用 `impl Drop` 得在自己的单元里写。
 - **OOM 直接终止进程**（与 `dict` 相同），没有错误码或状态可查；写入路径上不存在可恢复的 OOM（§5.5）。
@@ -194,11 +219,12 @@ ct install
 - **非线程安全**；并发由调用方加锁。
 - **不做泛型形状**：新增键值形状需要新增 shim 与 mapping（成本见设计文档 §7）。
 
-## 9. 版本与变更记录
+## 10. 版本与变更记录
 
 ### 0.1.0（2026-11-08，未发布）
 
-- S0：需求与骨架。`ct.pkg`、9 节 README、契约 `.m.ct` / `.h.ct`、`tests/` 占位。
+- 文档：新增 §8 术语表（Glossary），原 §8 / §9 顺延为 §9 / §10。
+- S0：需求与骨架。`ct.pkg`、10 节 README、契约 `.m.ct` / `.h.ct`、`tests/` 占位。
 - OOM 语义统一为进程终止（与 `dict` 一致）：状态码为 `HMAP_OK` / `HMAP_NOT_FOUND` /
   `HMAP_INVALID`（0 / 1 / 2），没有 OOM 项。
 - 未写实现、未拷第三方源码、未打 tag、未 push。
