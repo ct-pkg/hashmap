@@ -43,6 +43,10 @@
 - 第三方：`third_party/hashmap.c` / `hashmap.h`，固定在上游 commit
   `3735986914fc1c4e6a9123b406d0970666aa4aec`（2026-11-08 的 `master`），MIT，
   校验值见 `tools/third_party.sha256`。
+- 许可边界：本包 `LICENSE` 是 MIT 全文，只覆盖本仓自有代码（`.ct` 单元、shim、
+  测试、demo、README 与设计文档）。`third_party/` 下的上游代码**不在**该 MIT 文本的
+  覆盖范围内、也不因本包而被重新许可；其许可原文按 `Copyright (c) 2020 Joshua J Baker`
+  原样保留在 `third_party/LICENSE`，逐字节校验见 `tools/third_party.sha256`。
 - 不依赖 `std`，也不依赖其他 ct-pkg 包。
 
 `ct.pkg` 声明：

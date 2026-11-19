@@ -1,5 +1,4 @@
-The CT source in this package (the `.ct` units, the shim header, the tests, the
-demo, the README and the design document) is released under the MIT licence:
+MIT License
 
 Copyright (c) 2026 ct-pkg contributors
 
@@ -19,16 +18,3 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
----
-
-Third-party code vendored under `third_party/`; its licence text is kept
-verbatim in `third_party/LICENSE`:
-
-  hashmap.c - https://github.com/tidwall/hashmap.c
-  The MIT License (MIT)
-  Copyright (c) 2020 Joshua J Baker
-
-  The upstream LICENSE file and the copyright header of every source file must
-  be kept verbatim when the snapshot lands. The pinned commit and the file
-  digests are recorded in `tools/third_party.sha256`.

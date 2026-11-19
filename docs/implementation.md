@@ -343,6 +343,7 @@ Python 做文本注入与 sha256 重写。缺 `python3` 时两个脚本都会以
 
 ## 10. 许可
 
-本包 MIT（见 `LICENSE`）。上游 `hashmap.c` / `hashmap.h` 为
-`Copyright (c) 2020 Joshua J Baker`，MIT，原文件与 `third_party/LICENSE` 均保留；
+本包 MIT（`LICENSE` 为标准 MIT 全文）。上游 `hashmap.c` / `hashmap.h` 为
+`Copyright (c) 2020 Joshua J Baker`，MIT，原文件与 `third_party/LICENSE` 均原样保留，
+不被本包重新许可（边界说明见 `README.md` §2）；
 `tools/third_party.sha256` 固定其字节，防止无意的本地修改。
