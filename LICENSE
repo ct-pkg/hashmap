@@ -22,7 +22,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-Third-party code, added under `third_party/` at S1 (not present yet):
+Third-party code vendored under `third_party/`; its licence text is kept
+verbatim in `third_party/LICENSE`:
 
   hashmap.c - https://github.com/tidwall/hashmap.c
   The MIT License (MIT)
